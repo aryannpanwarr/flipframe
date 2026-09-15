@@ -132,6 +132,30 @@
   .code { font-family: var(--mono); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
   .empty { color: var(--muted); font-size: 14px; }
 
+  #chat { display: grid; gap: 12px; }
+  #messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
+  #messages:empty { display: none; }
+  .msg-user { font-weight: 500; }
+  .msg-model { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg-model.pending::after { content: "…"; color: var(--muted); }
+  .msg-model code { font-family: var(--mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+  .ts {
+    background: var(--stamp); color: var(--stamp-ink); border: 0; border-radius: 3px;
+    font: 500 12px/1.4 var(--mono); padding: 0 4px; cursor: pointer; font-variant-numeric: tabular-nums;
+  }
+  .suggest { display: flex; flex-wrap: wrap; gap: 6px; }
+  .suggest button {
+    background: none; border: 1px solid var(--line); border-radius: 999px;
+    padding: 4px 12px; font-size: 14px; color: var(--muted); cursor: pointer;
+  }
+  .suggest button:hover { color: var(--ink); border-color: var(--muted); }
+  #ask-input {
+    flex: 1; min-width: 0;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 11px 14px;
+  }
+  #ask-input::placeholder { color: var(--muted); }
+
   @media (max-width: 520px) {
     body { padding-block: 28px 64px; }
     .row { flex-direction: column; }
@@ -184,6 +208,20 @@
     <div>
       <p class="label" id="frames-label">Frames</p>
       <div id="strip" class="strip"></div>
+    </div>
+
+    <div id="chat">
+      <p class="label" style="margin:0">Ask about this video</p>
+      <ul id="messages" aria-live="polite"></ul>
+      <div class="suggest" id="suggest">
+        <button type="button">Summarize this video</button>
+        <button type="button">What code is written?</button>
+        <button type="button">What are the key moments?</button>
+      </div>
+      <form id="ask" class="row">
+        <input id="ask-input" type="text" required autocomplete="off" placeholder="Ask a question, or mention a time like 4:12" aria-label="Question">
+        <button id="ask-go" class="primary" type="submit">Ask</button>
+      </form>
     </div>
 
     <div>
@@ -284,6 +322,7 @@ async function show(id) {
   $("recent").hidden = true;
   $("result").hidden = false;
   render();
+  renderChat();
 }
 
 function render() {
@@ -309,10 +348,7 @@ document.querySelector(".tabs").addEventListener("click", (e) => {
   render();
 });
 
-$("strip").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-t]");
-  if (!b) return;
-  const t = Number(b.dataset.t);
+function jump(t) {
   const rows = [...$("entries").children].filter((li) => li.dataset.t !== undefined);
   const row = rows.find((li) => Number(li.dataset.t) >= t) || rows[rows.length - 1];
   if (!row) return;
@@ -320,6 +356,97 @@ $("strip").addEventListener("click", (e) => {
   row.classList.remove("flash");
   void row.offsetWidth;
   row.classList.add("flash");
+}
+
+$("strip").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-t]");
+  if (b) jump(Number(b.dataset.t));
+});
+
+// Chat
+const chats = {};
+const storeKey = (id) => `flipframe-chat-${id}`;
+
+function loadChat(id) {
+  if (!chats[id]) {
+    try { chats[id] = JSON.parse(localStorage.getItem(storeKey(id))) || []; } catch { chats[id] = []; }
+  }
+  return chats[id];
+}
+
+function saveChat(id) {
+  try { localStorage.setItem(storeKey(id), JSON.stringify(chats[id].slice(-40))); } catch {}
+}
+
+function formatAnswer(text) {
+  return esc(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
+    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\[(\d{1,2}):([0-5]\d)\]/g, (_, m, sec) =>
+      `<button type="button" class="ts" data-t="${Number(m) * 60 + Number(sec)}">${m.padStart(2, "0")}:${sec}</button>`);
+}
+
+function renderChat(pending = false) {
+  const msgs = loadChat(current.id);
+  $("messages").innerHTML = msgs.map((m, i) => m.role === "user"
+    ? `<li class="msg-user">${esc(m.text)}</li>`
+    : `<li class="msg-model${pending && i === msgs.length - 1 ? " pending" : ""}">${formatAnswer(m.text)}</li>`
+  ).join("");
+  $("suggest").hidden = msgs.length > 0;
+}
+
+async function ask(question) {
+  const id = current.id;
+  const msgs = loadChat(id);
+  msgs.push({ role: "user", text: question });
+  const answer = { role: "model", text: "" };
+  msgs.push(answer);
+  $("ask-go").disabled = true;
+  $("ask-input").value = "";
+  renderChat(true);
+
+  try {
+    const res = await fetch(`/api/videos/${encodeURIComponent(id)}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ messages: msgs.slice(0, -1) }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || `Request failed (${res.status})`);
+    }
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      answer.text += decoder.decode(value, { stream: true });
+      if (current && current.id === id) renderChat(true);
+    }
+    if (!answer.text.trim()) answer.text = "No answer came back. Try asking again.";
+  } catch (err) {
+    answer.text = `Couldn't get an answer: ${err.message}`;
+  } finally {
+    saveChat(id);
+    $("ask-go").disabled = false;
+    if (current && current.id === id) renderChat();
+  }
+}
+
+$("ask").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const q = $("ask-input").value.trim();
+  if (q && current) ask(q);
+});
+
+$("suggest").addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (b && current && !$("ask-go").disabled) ask(b.textContent);
+});
+
+$("messages").addEventListener("click", (e) => {
+  const b = e.target.closest("button.ts");
+  if (b) jump(Number(b.dataset.t));
 });
 
 $("copy").addEventListener("click", async () => {

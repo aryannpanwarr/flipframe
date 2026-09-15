@@ -1,6 +1,7 @@
 """Local web page for FlipFrame."""
 
 import json
+import os
 import re
 import threading
 import time
@@ -10,10 +11,10 @@ from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import CACHE, run
+from . import CACHE, chat, run
 
 PAGE = Path(__file__).parent / "web" / "index.html"
 VIDEO_ID = re.compile(r"^[\w-]{6,20}$")
@@ -27,6 +28,15 @@ class WatchRequest(BaseModel):
     url: str
     coding: bool = False
     force: bool = False
+
+
+class ChatMessage(BaseModel):
+    role: str
+    text: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -74,6 +84,26 @@ def video(video_id: str) -> dict:
     if not VIDEO_ID.match(video_id) or not path.exists():
         raise HTTPException(404, "Video not found")
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@app.post("/api/videos/{video_id}/chat")
+def ask(video_id: str, req: ChatRequest) -> StreamingResponse:
+    data = video(video_id)
+    messages = [m.model_dump() for m in req.messages][-20:]
+    if not messages or messages[-1]["role"] != "user" or not messages[-1]["text"].strip():
+        raise HTTPException(400, "Ask a question first.")
+    if any(m["role"] not in ("user", "model") or len(m["text"]) > 8000 for m in messages):
+        raise HTTPException(400, "Each message must be from user or model and under 8000 characters.")
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        raise HTTPException(400, "Chat needs GEMINI_API_KEY in .env.")
+
+    def body():
+        try:
+            yield from chat.stream(CACHE / video_id, data, messages)
+        except Exception as e:  # the page is already streaming, so report the error inline
+            yield f"\n\n(Error from the model: {str(e).strip().splitlines()[-1][:300]})"
+
+    return StreamingResponse(body(), media_type="text/plain; charset=utf-8")
 
 
 @app.get("/frames/{video_id}/{name}")
