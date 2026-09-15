@@ -5,7 +5,17 @@ Let Claude actually *watch* YouTube videos, not just read the transcript.
 FlipFrame flips through a video, keeps the few frames that matter, and turns them
 plus the subtitles into a short, timestamped text timeline.
 
-## Usage
+## Web page
+
+```bash
+uv sync
+uv run flipframe serve        # opens http://127.0.0.1:8765
+```
+
+Paste a link, press Watch. Tick "Code or small text on screen" for coding videos.
+Click a frame to jump to that moment in the timeline; click a timestamp to open YouTube there.
+
+## Command line
 
 ```bash
 uv sync

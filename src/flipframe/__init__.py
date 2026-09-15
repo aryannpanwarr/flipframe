@@ -4,9 +4,10 @@ import argparse
 import os
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 
-from dotenv import load_dotenv
+from dotenv import find_dotenv, load_dotenv
 
 from . import describe, fetch, frames, sheets, timeline
 
@@ -15,45 +16,65 @@ KEYS = {"claude": ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"],
 CACHE = Path(os.environ.get("FLIPFRAME_CACHE", Path.home() / ".cache" / "flipframe"))
 
 
-def watch(args: argparse.Namespace) -> None:
-    vid = fetch.video_id(args.url)
+def run(url: str, *, budget: int = 90, threshold: float = 0.5, max_gap: int = 20,
+        height: int = 360, grid: int = 3, provider: str = "gemini", model: str | None = None,
+        describe_frames: bool = True, force: bool = False,
+        log: Callable[[str], None] = print) -> Path:
+    """Run the whole pipeline. Returns the video's cache folder."""
+    vid = fetch.video_id(url)
     workdir = CACHE / (vid or "unknown")
-    out = workdir / "timeline.md"
-    if vid and out.exists() and not args.force:
-        print(out)
-        return
+    if vid and (workdir / "timeline.json").exists() and not force:
+        log("already watched, loading saved timeline")
+        return workdir
     workdir.mkdir(parents=True, exist_ok=True)
 
-    started = time.time()
-    log = lambda msg: print(f"[{time.time() - started:5.1f}s] {msg}", file=sys.stderr)
-
     log("downloading video and subtitles")
-    meta = fetch.fetch(args.url, workdir, args.height)
+    meta = fetch.fetch(url, workdir, height)
+    workdir = CACHE / meta["id"]  # URL we couldn't parse: trust yt-dlp's id
     cues = fetch.parse_vtt(meta["subs"]) if meta["subs"] else []
-    log(f"{meta['title']!r}: {meta['duration']}s, {len(cues)} subtitle lines")
+    log(f"{meta['title']}: {meta['duration'] // 60} min, {len(cues)} subtitle lines")
 
+    log("looking for frames that change")
     thumbs = frames.thumbnails(meta["video"])
-    chosen = frames.select(thumbs, cues, args.budget, args.threshold, args.max_gap)
+    chosen = frames.select(thumbs, cues, budget, threshold, max_gap)
     log(f"kept {len(chosen)} of {len(thumbs)} seconds")
 
     frame_paths = frames.extract(meta["video"], chosen, workdir / "frames")
-    sheet_list = sheets.build(frame_paths, workdir / "sheets", args.grid)
+    sheet_list = sheets.build(frame_paths, workdir / "sheets", grid)
     log(f"built {len(sheet_list)} contact sheets")
 
     visuals = []
-    if args.no_describe:
-        log("skipping descriptions (--no-describe)")
-    elif not any(os.environ.get(k) for k in KEYS[args.provider]):
-        log(f"no {KEYS[args.provider][0]} set: skipping descriptions, sheets are still saved")
+    if not describe_frames:
+        log("skipping descriptions")
+    elif not any(os.environ.get(k) for k in KEYS[provider]):
+        log(f"no {KEYS[provider][0]} set: skipping descriptions")
     else:
-        model = args.model or describe.PROVIDERS[args.provider][1]
-        log(f"describing sheets with {args.provider} {model}")
-        visuals = describe.describe(sheet_list, cues, args.provider, model)
-        log(f"got {len(visuals)} visual lines")
+        model = model or describe.PROVIDERS[provider][1]
+        log(f"describing frames with {model}")
+        visuals = describe.describe(sheet_list, cues, provider, model)
+        log(f"got {len(visuals)} visual notes")
 
-    timeline.write(meta, cues, visuals, workdir / "frames", out)
+    items = timeline.entries(cues, visuals)
+    timeline.write(meta, items, [sheets.seconds_of(f) for f in frame_paths], workdir)
     log("done")
-    print(out)
+    return workdir
+
+
+def watch(args: argparse.Namespace) -> None:
+    started = time.time()
+    workdir = run(
+        args.url, budget=args.budget, threshold=args.threshold, max_gap=args.max_gap,
+        height=args.height, grid=args.grid, provider=args.provider, model=args.model,
+        describe_frames=not args.no_describe, force=args.force,
+        log=lambda msg: print(f"[{time.time() - started:5.1f}s] {msg}", file=sys.stderr),
+    )
+    print(workdir / "timeline.md")
+
+
+def serve(args: argparse.Namespace) -> None:
+    from .server import start
+
+    start(args.port, open_browser=not args.no_browser)
 
 
 def main() -> None:
@@ -78,6 +99,11 @@ def main() -> None:
     w.add_argument("--force", action="store_true", help="rebuild even if cached")
     w.set_defaults(func=watch)
 
-    load_dotenv()  # .env in the current directory or any parent
+    s = sub.add_parser("serve", help="open the web page")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true", help="don't open a browser tab")
+    s.set_defaults(func=serve)
+
+    load_dotenv(find_dotenv(usecwd=True))
     args = parser.parse_args()
     args.func(args)

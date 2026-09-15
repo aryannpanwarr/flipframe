@@ -1,0 +1,338 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlipFrame</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+  :root {
+    --ground: #f5f5f3;
+    --surface: #ffffff;
+    --ink: #18191b;
+    --muted: #6e7075;
+    --line: #e2e2df;
+    --stamp: #f2c200;
+    --stamp-ink: #18191b;
+    --focus: #b38f00;
+    --error: #b42318;
+    --sans: "Geist", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121314;
+      --surface: #1a1b1d;
+      --ink: #ededeb;
+      --muted: #8e9096;
+      --line: #2a2c2f;
+      --focus: #f2c200;
+      --error: #f97066;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #121314;
+    --surface: #1a1b1d;
+    --ink: #ededeb;
+    --muted: #8e9096;
+    --line: #2a2c2f;
+    --focus: #f2c200;
+    --error: #f97066;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--ground);
+    color: var(--ink);
+    font: 15px/1.55 var(--sans);
+    padding-inline: 20px;
+    padding-block: 48px 96px;
+  }
+  main { max-width: 720px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+  main > *, #result > * { min-width: 0; }
+  button, input { font: inherit; color: inherit; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+  [hidden] { display: none !important; }
+
+  header { display: flex; align-items: baseline; gap: 10px; }
+  .mark { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+  .tag { color: var(--muted); font-size: 14px; }
+
+  form { display: grid; gap: 12px; }
+  .row { display: flex; gap: 8px; }
+  #url {
+    flex: 1; min-width: 0;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 11px 14px;
+  }
+  #url::placeholder { color: var(--muted); }
+  .primary {
+    background: var(--ink); color: var(--ground); border: 0; border-radius: 8px;
+    padding: 0 20px; font-weight: 500; cursor: pointer;
+  }
+  .primary:disabled { opacity: 0.45; cursor: default; }
+  .check { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 14px; cursor: pointer; width: fit-content; }
+  .check input { accent-color: var(--ink); margin: 0; }
+
+  .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
+
+  #recent ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  #recent li button {
+    width: 100%; display: flex; justify-content: space-between; gap: 16px;
+    background: none; border: 0; border-bottom: 1px solid var(--line);
+    padding: 10px 2px; text-align: left; cursor: pointer;
+  }
+  #recent li button:hover .title { text-decoration: underline; text-underline-offset: 3px; }
+  #recent .title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .time { font-family: var(--mono); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+  #progress { font-family: var(--mono); font-size: 13px; color: var(--muted); margin: 0; padding: 0; list-style: none; display: grid; gap: 2px; }
+  #progress li:last-child { color: var(--ink); }
+  #progress li.running:last-child::after { content: "…"; }
+  .error { color: var(--error); font-size: 14px; margin: 0; }
+
+  #result { display: grid; grid-template-columns: minmax(0, 1fr); gap: 20px; }
+  .head { display: grid; gap: 4px; }
+  .head h1 { font-size: 22px; line-height: 1.3; font-weight: 600; letter-spacing: -0.015em; margin: 0; text-wrap: balance; }
+  .meta { display: flex; flex-wrap: wrap; gap: 6px 16px; color: var(--muted); font-size: 14px; }
+  .meta a, .link { color: var(--muted); text-underline-offset: 3px; }
+  .link { background: none; border: 0; padding: 0; text-decoration: underline; cursor: pointer; font-size: 14px; }
+  .link:hover, .meta a:hover { color: var(--ink); }
+
+  .strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; }
+  .strip button {
+    position: relative; flex: 0 0 auto; width: 144px; aspect-ratio: 16 / 9; max-width: 100%;
+    padding: 0; border: 1px solid var(--line); border-radius: 4px; overflow: hidden;
+    background: #000; cursor: pointer; scroll-snap-align: start;
+  }
+  .strip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .stamp {
+    position: absolute; top: 4px; left: 4px;
+    background: var(--stamp); color: var(--stamp-ink);
+    font: 500 11px/1 var(--mono); padding: 3px 4px; border-radius: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .bar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .tabs { display: flex; gap: 2px; background: var(--line); padding: 2px; border-radius: 7px; }
+  .tabs button { background: none; border: 0; padding: 4px 12px; border-radius: 5px; font-size: 14px; color: var(--muted); cursor: pointer; }
+  .tabs button[aria-pressed="true"] { background: var(--surface); color: var(--ink); }
+
+  #entries { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  #entries li { display: grid; grid-template-columns: 52px 64px minmax(0, 1fr); gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); scroll-margin-top: 24px; }
+  #entries li.flash { animation: flash 1.4s ease-out; }
+  @keyframes flash { from { background: color-mix(in srgb, var(--stamp) 28%, transparent); } to { background: transparent; } }
+  #entries a.time { text-decoration: none; padding-top: 1px; }
+  #entries a.time:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  .kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding-top: 3px; }
+  .speech .body { color: var(--muted); }
+  .code { font-family: var(--mono); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+  .empty { color: var(--muted); font-size: 14px; }
+
+  @media (max-width: 520px) {
+    body { padding-block: 28px 64px; }
+    .row { flex-direction: column; }
+    .primary { padding: 11px 20px; }
+    #entries li { grid-template-columns: 48px minmax(0, 1fr); }
+    .kind { grid-column: 2; grid-row: 1; padding-top: 2px; }
+    #entries li .body { grid-column: 1 / -1; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    #entries li.flash { animation: none; background: color-mix(in srgb, var(--stamp) 20%, transparent); }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <span class="mark">FlipFrame</span>
+    <span class="tag">watch a YouTube video as text</span>
+  </header>
+
+  <form id="form">
+    <div class="row">
+      <input id="url" type="url" required placeholder="Paste a YouTube link" autocomplete="off" aria-label="YouTube link">
+      <button id="go" class="primary" type="submit">Watch</button>
+    </div>
+    <label class="check"><input id="coding" type="checkbox"> Code or small text on screen (sharper, slower)</label>
+  </form>
+
+  <section id="status" hidden>
+    <ul id="progress"></ul>
+    <p id="error" class="error" hidden></p>
+  </section>
+
+  <section id="recent" hidden>
+    <p class="label">Watched</p>
+    <ul></ul>
+  </section>
+
+  <section id="result" hidden>
+    <div class="head">
+      <h1 id="title"></h1>
+      <div class="meta">
+        <span id="length"></span>
+        <a id="yt" target="_blank" rel="noopener">Open on YouTube</a>
+        <button id="copy" class="link" type="button">Copy timeline</button>
+        <button id="rewatch" class="link" type="button">Watch again</button>
+      </div>
+    </div>
+
+    <div>
+      <p class="label" id="frames-label">Frames</p>
+      <div id="strip" class="strip"></div>
+    </div>
+
+    <div>
+      <div class="bar">
+        <p class="label" style="margin:0">Timeline</p>
+        <div class="tabs" role="group" aria-label="Show">
+          <button type="button" data-filter="all" aria-pressed="true">All</button>
+          <button type="button" data-filter="screen" aria-pressed="false">On screen</button>
+          <button type="button" data-filter="speech" aria-pressed="false">Speech</button>
+        </div>
+      </div>
+      <ul id="entries" style="margin-top:10px"></ul>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const stamp = (s) => `${String(Math.floor(s / 60)).padStart(2, "0")}:${String(s % 60).padStart(2, "0")}`;
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const KIND = { SPEECH: "Speech", SCREEN: "Screen", TEXT: "Text", ACTION: "Action" };
+
+let current = null;
+let filter = "all";
+let lastUrl = "";
+
+async function api(path, body) {
+  const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || `Request failed (${res.status})`);
+  return data;
+}
+
+async function loadRecent() {
+  const list = await api("/api/videos").catch(() => []);
+  const ul = $("recent").querySelector("ul");
+  ul.innerHTML = list.map((v) =>
+    `<li><button type="button" data-id="${esc(v.id)}"><span class="title">${esc(v.title)}</span><span class="time">${stamp(v.duration)}</span></button></li>`
+  ).join("");
+  $("recent").hidden = !list.length || !!current;
+}
+
+$("recent").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-id]");
+  if (b) show(b.dataset.id);
+});
+
+async function start(url, force = false) {
+  lastUrl = url;
+  $("go").disabled = true;
+  $("result").hidden = true;
+  $("recent").hidden = true;
+  $("error").hidden = true;
+  $("status").hidden = false;
+  $("progress").innerHTML = "";
+  current = null;
+
+  try {
+    const { job } = await api("/api/watch", { url, coding: $("coding").checked, force });
+    while (true) {
+      const j = await api(`/api/jobs/${job}`);
+      $("progress").innerHTML = j.log.map((l) => `<li class="${j.status === "running" ? "running" : ""}">${esc(l)}</li>`).join("");
+      if (j.status === "done") { $("status").hidden = true; await show(j.video); break; }
+      if (j.status === "error") throw new Error(j.error);
+      await new Promise((r) => setTimeout(r, 700));
+    }
+  } catch (err) {
+    $("error").textContent = `Couldn't watch this video: ${err.message}`;
+    $("error").hidden = false;
+    loadRecent();
+  } finally {
+    $("go").disabled = false;
+  }
+}
+
+$("form").addEventListener("submit", (e) => {
+  e.preventDefault();
+  start($("url").value.trim());
+});
+
+$("rewatch").addEventListener("click", () => current && start(lastUrl || current.url, true));
+
+async function show(id) {
+  const data = await api(`/api/videos/${encodeURIComponent(id)}`);
+  current = data;
+  lastUrl = data.url;
+  history.replaceState(null, "", `#v=${data.id}`);
+
+  $("title").textContent = data.title;
+  $("length").textContent = `${Math.floor(data.duration / 60)} min ${data.duration % 60} s`;
+  $("yt").href = data.url;
+  $("frames-label").textContent = `${data.frames.length} frames kept`;
+  $("strip").innerHTML = data.frames.map((s) =>
+    `<button type="button" data-t="${s}" aria-label="Jump to ${stamp(s)}"><img loading="lazy" alt="" src="/frames/${esc(data.id)}/${String(s).padStart(5, "0")}.jpg"><span class="stamp">${stamp(s)}</span></button>`
+  ).join("");
+
+  $("status").hidden = true;
+  $("recent").hidden = true;
+  $("result").hidden = false;
+  render();
+}
+
+function render() {
+  const items = current.entries.filter((e) =>
+    filter === "all" || (filter === "speech" ? e.kind === "SPEECH" : e.kind !== "SPEECH"));
+  const base = current.url.includes("?") ? `${current.url}&` : `${current.url}?`;
+  $("entries").innerHTML = items.length ? items.map((e) => {
+    const body = e.kind === "TEXT"
+      ? `<pre class="code">${esc(e.text.split(/\s*⏎\s*/).join("\n"))}</pre>`
+      : esc(e.text);
+    return `<li class="${e.kind.toLowerCase()}" data-t="${e.t}">
+      <a class="time" href="${esc(base)}t=${e.t}s" target="_blank" rel="noopener" title="Open on YouTube at ${stamp(e.t)}">${stamp(e.t)}</a>
+      <span class="kind">${KIND[e.kind] || e.kind}</span>
+      <div class="body">${body}</div></li>`;
+  }).join("") : `<li><span></span><span></span><span class="empty">Nothing here. If there are no screen notes, check that GEMINI_API_KEY is set in .env.</span></li>`;
+}
+
+document.querySelector(".tabs").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-filter]");
+  if (!b) return;
+  filter = b.dataset.filter;
+  document.querySelectorAll(".tabs button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+  render();
+});
+
+$("strip").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-t]");
+  if (!b) return;
+  const t = Number(b.dataset.t);
+  const rows = [...$("entries").children].filter((li) => li.dataset.t !== undefined);
+  const row = rows.find((li) => Number(li.dataset.t) >= t) || rows[rows.length - 1];
+  if (!row) return;
+  row.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  row.classList.remove("flash");
+  void row.offsetWidth;
+  row.classList.add("flash");
+});
+
+$("copy").addEventListener("click", async () => {
+  const text = [`# ${current.title}`, current.url, "",
+    ...current.entries.map((e) => `[${stamp(e.t)}] ${e.kind.padEnd(7)} ${e.text}`)].join("\n");
+  await navigator.clipboard.writeText(text);
+  $("copy").textContent = "Copied";
+  setTimeout(() => ($("copy").textContent = "Copy timeline"), 1500);
+});
+
+const fromHash = location.hash.match(/v=([\w-]+)/);
+if (fromHash) show(fromHash[1]).catch(loadRecent);
+else loadRecent();
+</script>
+</body>
+</html>
