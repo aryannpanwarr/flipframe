@@ -1,65 +1,104 @@
 # FlipFrame
 
-Let Claude actually *watch* YouTube videos, not just read the transcript.
+Give a model the ability to watch a video file.
 
-FlipFrame flips through a video, keeps the few frames that matter, and turns them
-plus the subtitles into a short, timestamped text timeline.
+FlipFrame turns a local video into a timestamped timeline of what was **said** (transcribed
+from the audio) and what was **shown** (notes on the frames that changed), and lets a model
+look at the actual frames when it needs detail. You supply the video; FlipFrame never
+downloads anything.
+
+## Setup
+
+```bash
+uv sync
+echo 'GEMINI_API_KEY=your-key' > .env
+```
+
+Needs `ffmpeg` on your PATH.
+
+## Use it as an MCP tool
+
+Add it to Claude Code (drop `--scope user` to enable it for one project only):
+
+```bash
+claude mcp add flipframe --scope user -- uv --directory /absolute/path/to/flipframe run flipframe mcp
+```
+
+Other MCP clients, e.g. Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "flipframe": {
+      "command": "uv",
+      "args": ["--directory", "/absolute/path/to/flipframe", "run", "flipframe", "mcp"]
+    }
+  }
+}
+```
+
+Tools:
+
+| Tool | What it does |
+|---|---|
+| `watch_video(path, coding?, force?)` | Process a video file (or load it from cache) and return the timeline |
+| `get_frames(video, timestamps)` | Return the actual picture at up to 6 moments, e.g. `["4:12", "7:30"]` |
+| `get_timeline(video, start?, end?, kinds?)` | Read part of a long timeline, e.g. only `TEXT` between `10:00` and `20:00` |
+| `list_videos()` | Videos already watched |
+
+Set `coding: true` for videos with code or small text.
 
 ## Web page
 
 ```bash
-uv sync
 uv run flipframe serve        # opens http://127.0.0.1:8765
 ```
 
-Paste a link, press Watch. Tick "Code or small text on screen" for coding videos.
-Click a frame to jump to that moment in the timeline; click a timestamp to open YouTube there.
+Drop a video file in. You get a player, the kept frames, the timeline, and a chat about the
+video. Click any timestamp to play from there.
 
 ## Command line
 
 ```bash
-uv sync
-# put GEMINI_API_KEY=... in .env (or ANTHROPIC_API_KEY for --provider claude)
-uv run flipframe watch "https://www.youtube.com/watch?v=VIDEO_ID"
+uv run flipframe watch path/to/video.mp4            # prints the path to timeline.md
+uv run flipframe watch talk.mp4 --grid 2            # code or small text on screen
 ```
-
-Prints the path to `timeline.md`. Everything is cached in `~/.cache/flipframe/<video_id>/`
-(change with `FLIPFRAME_CACHE`), so a second run on the same video is instant.
 
 | Flag | Default | Meaning |
 |---|---|---|
 | `--budget` | 90 | max frames to keep |
 | `--threshold` | 0.5 | percent of the picture that must change since the last kept frame |
 | `--max-gap` | 20 | always keep a frame at least every N seconds |
-| `--height` | 360 | download resolution; use 720 for code or small text |
-| `--grid` | 3 | frames per sheet side; 2 shows each frame bigger |
-| `--provider` | `gemini` | `gemini` or `claude` |
-| `--model` | `gemini-3.5-flash-lite` / `claude-haiku-4-5` | override the model |
-| `--no-describe` | off | stop after contact sheets (no API key, no cost) |
-| `--force` | off | rebuild even if cached |
-
-Needs `ffmpeg` on your PATH.
-
-For coding videos: `--height 720 --grid 2` (otherwise small symbols like quote marks get lost).
+| `--grid` | 3 | frames per contact-sheet side; 2 shows each frame bigger |
+| `--provider` | `gemini` | who writes the frame notes: `gemini` or `claude` |
+| `--no-describe` | off | skip frame notes |
+| `--force` | off | reprocess even if cached |
 
 ## How it works
 
-1. **Download** a small copy (no audio) with `yt-dlp`
-2. **Subtitles**: grab YouTube's free captions
-3. **Pick frames**: shrink every second to a 160×90 thumbnail and keep a frame when enough of it
-   differs from the last kept one, when the speaker points at the screen ("as you can see…"), or
-   when nothing was kept for 20 s
-4. **Contact sheets**: tile kept frames 3×3 (or 2×2) with timestamps burned in
-5. **Describe** each sheet with a cheap model, told to skip what the subtitles already say
-6. **Timeline**: merge speech + visuals into `timeline.md`; frames stay on disk for close-ups
+1. **Speech**: ffmpeg pulls the audio out, splits it into 5-minute pieces, and Gemini
+   (`gemini-3.5-flash-lite`) transcribes them in parallel with timestamps
+2. **Frames** (at the same time): every second is shrunk to a 160×90 thumbnail; a frame is kept
+   when enough of it changed since the last kept one, when the speaker points at the screen
+   ("as you can see…"), or when nothing was kept for 20 s
+3. **Contact sheets**: kept frames are tiled 3×3 (or 2×2) with timestamps burned in
+4. **Frame notes**: Gemini describes each sheet, skipping what the speech already says
+5. **Timeline**: speech and notes merged into `timeline.json` and `timeline.md`
 
-## Cache layout
+## Cache
+
+Everything lives in `~/.cache/flipframe/<id>/` (change with `FLIPFRAME_CACHE`). The id comes
+from the file's contents, so the same file is only processed once wherever it's stored.
 
 ```
-~/.cache/flipframe/<video_id>/
-  video.mp4          360p copy
-  video.en.vtt       subtitles
-  frames/00252.jpg   kept frames, named by second (00252 = 04:12)
-  sheets/            contact sheets sent to the model
-  timeline.md        the result
+<id>/
+  audio/        speech-quality audio pieces
+  frames/       kept frames, named by second (00252.jpg = 04:12)
+  closeups/     extra frames fetched by get_frames
+  sheets/       contact sheets sent to the model
+  timeline.json
+  timeline.md
 ```
+
+The original video is not copied; FlipFrame reads it from where it is. Web uploads are stored
+in `~/.cache/flipframe/uploads/`.

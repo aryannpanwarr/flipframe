@@ -56,8 +56,8 @@ def select(thumbs: np.ndarray, cues: list[tuple[float, str]],
     return kept
 
 
-def extract(video: Path, seconds: list[int], out: Path) -> list[Path]:
-    """Save the chosen seconds as full-quality JPEGs named by timestamp."""
+def extract(video: Path, seconds: list[int], out: Path, max_width: int = 1280) -> list[Path]:
+    """Save the chosen seconds as JPEGs (at most max_width wide) named by timestamp."""
     out.mkdir(exist_ok=True)
     paths = []
     for t in seconds:
@@ -65,7 +65,8 @@ def extract(video: Path, seconds: list[int], out: Path) -> list[Path]:
         if not p.exists():
             subprocess.run(
                 ["ffmpeg", "-v", "error", "-ss", str(t), "-i", str(video),
-                 "-frames:v", "1", "-q:v", "3", "-y", str(p)],
+                 "-frames:v", "1", "-vf", f"scale='min({max_width},iw)':-2",
+                 "-q:v", "3", "-y", str(p)],
                 check=True,
             )
         if not p.exists():

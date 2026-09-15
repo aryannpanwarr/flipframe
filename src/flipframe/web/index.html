@@ -63,12 +63,19 @@
 
   form { display: grid; gap: 12px; }
   .row { display: flex; gap: 8px; }
-  #url {
-    flex: 1; min-width: 0;
-    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
-    padding: 11px 14px;
+  .drop {
+    display: grid; place-items: center; gap: 4px; text-align: center;
+    background: var(--surface); border: 1px dashed var(--line); border-radius: 10px;
+    padding: 28px 16px; cursor: pointer;
   }
-  #url::placeholder { color: var(--muted); }
+  .drop:hover, .drop.over { border-color: var(--muted); }
+  .drop:focus-within { outline: 2px solid var(--focus); outline-offset: 2px; }
+  .drop strong { font-weight: 500; }
+  .drop span { color: var(--muted); font-size: 14px; }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  .bar-track { height: 3px; background: var(--line); border-radius: 2px; overflow: hidden; }
+  .bar-fill { height: 100%; width: 0; background: var(--ink); transition: width 0.2s; }
+  #player { width: 100%; max-height: 420px; background: #000; border-radius: 8px; display: block; }
   .primary {
     background: var(--ink); color: var(--ground); border: 0; border-radius: 8px;
     padding: 0 20px; font-weight: 500; cursor: pointer;
@@ -125,8 +132,8 @@
   #entries li { display: grid; grid-template-columns: 52px 64px minmax(0, 1fr); gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--line); scroll-margin-top: 24px; }
   #entries li.flash { animation: flash 1.4s ease-out; }
   @keyframes flash { from { background: color-mix(in srgb, var(--stamp) 28%, transparent); } to { background: transparent; } }
-  #entries a.time { text-decoration: none; padding-top: 1px; }
-  #entries a.time:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  #entries button.time { background: none; border: 0; padding: 1px 0 0; text-align: left; cursor: pointer; align-self: start; }
+  #entries button.time:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   .kind { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); padding-top: 3px; }
   .speech .body { color: var(--muted); }
   .code { font-family: var(--mono); font-size: 13px; line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
@@ -178,19 +185,21 @@
 <main>
   <header>
     <span class="mark">FlipFrame</span>
-    <span class="tag">watch a YouTube video as text</span>
+    <span class="tag">watch a video as text</span>
   </header>
 
   <form id="form">
-    <div class="row">
-      <input id="url" type="url" required placeholder="Paste a YouTube link" autocomplete="off" aria-label="YouTube link">
-      <button id="go" class="primary" type="submit">Watch</button>
-    </div>
+    <label class="drop" id="drop">
+      <input id="file" type="file" accept="video/*,.mkv,.mov,.webm,.avi">
+      <strong>Drop a video file here, or click to choose one</strong>
+      <span>MP4, MOV, MKV, WebM</span>
+    </label>
     <label class="check"><input id="coding" type="checkbox"> Code or small text on screen (sharper, slower)</label>
   </form>
 
   <section id="status" hidden>
-    <ul id="progress"></ul>
+    <div class="bar-track" id="upload-bar" hidden><div class="bar-fill" id="upload-fill"></div></div>
+    <ul id="progress" style="margin-top:10px"></ul>
     <p id="error" class="error" hidden></p>
   </section>
 
@@ -200,11 +209,11 @@
   </section>
 
   <section id="result" hidden>
+    <video id="player" controls preload="metadata" hidden></video>
     <div class="head">
       <h1 id="title"></h1>
       <div class="meta">
         <span id="length"></span>
-        <a id="yt" target="_blank" rel="noopener">Open on YouTube</a>
         <button id="copy" class="link" type="button">Copy timeline</button>
         <button id="rewatch" class="link" type="button">Watch again</button>
       </div>
@@ -251,7 +260,6 @@ const KIND = { SPEECH: "Speech", SCREEN: "Screen", TEXT: "Text", ACTION: "Action
 
 let current = null;
 let filter = "all";
-let lastUrl = "";
 
 async function api(path, body) {
   const res = await fetch(path, body ? { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {});
@@ -274,50 +282,115 @@ $("recent").addEventListener("click", (e) => {
   if (b) show(b.dataset.id);
 });
 
-async function start(url, force = false) {
-  lastUrl = url;
-  $("go").disabled = true;
+function busy(on) {
+  $("file").disabled = on;
+  $("drop").style.opacity = on ? 0.5 : 1;
+}
+
+async function follow(job) {
+  while (true) {
+    const j = await api(`/api/jobs/${job}`);
+    $("progress").innerHTML = j.log.map((l) => `<li class="${j.status === "running" ? "running" : ""}">${esc(l)}</li>`).join("");
+    if (j.status === "done") { $("status").hidden = true; await show(j.video); return; }
+    if (j.status === "error") throw new Error(j.error);
+    await new Promise((r) => setTimeout(r, 700));
+  }
+}
+
+function resetView() {
+  $("player").pause();
   $("result").hidden = true;
   $("recent").hidden = true;
   $("error").hidden = true;
   $("status").hidden = false;
   $("progress").innerHTML = "";
   current = null;
+}
 
+function fail(err) {
+  $("upload-bar").hidden = true;
+  $("error").textContent = `Couldn't process this video: ${err.message}`;
+  $("error").hidden = false;
+  loadRecent();
+}
+
+function uploadFile(file) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    const q = new URLSearchParams({ name: file.name, coding: $("coding").checked });
+    xhr.open("POST", `/api/upload?${q}`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable) $("upload-fill").style.width = `${(e.loaded / e.total) * 100}%`;
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch {}
+      xhr.status < 300 ? resolve(data) : reject(new Error(data.detail || `Upload failed (${xhr.status})`));
+    };
+    xhr.onerror = () => reject(new Error("Upload failed. Is the FlipFrame server still running?"));
+    xhr.send(file);
+  });
+}
+
+async function process(file) {
+  if (!file) return;
+  busy(true);
+  resetView();
+  $("upload-bar").hidden = false;
+  $("upload-fill").style.width = "0";
+  $("progress").innerHTML = `<li class="running">uploading ${esc(file.name)}</li>`;
   try {
-    const { job } = await api("/api/watch", { url, coding: $("coding").checked, force });
-    while (true) {
-      const j = await api(`/api/jobs/${job}`);
-      $("progress").innerHTML = j.log.map((l) => `<li class="${j.status === "running" ? "running" : ""}">${esc(l)}</li>`).join("");
-      if (j.status === "done") { $("status").hidden = true; await show(j.video); break; }
-      if (j.status === "error") throw new Error(j.error);
-      await new Promise((r) => setTimeout(r, 700));
-    }
+    const { job } = await uploadFile(file);
+    $("upload-bar").hidden = true;
+    await follow(job);
   } catch (err) {
-    $("error").textContent = `Couldn't watch this video: ${err.message}`;
-    $("error").hidden = false;
-    loadRecent();
+    fail(err);
   } finally {
-    $("go").disabled = false;
+    busy(false);
+    $("file").value = "";
   }
 }
 
-$("form").addEventListener("submit", (e) => {
+$("file").addEventListener("change", () => process($("file").files[0]));
+$("drop").addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("over"); });
+$("drop").addEventListener("dragleave", () => $("drop").classList.remove("over"));
+$("drop").addEventListener("drop", (e) => {
   e.preventDefault();
-  start($("url").value.trim());
+  $("drop").classList.remove("over");
+  if (!$("file").disabled) process(e.dataTransfer.files[0]);
 });
 
-$("rewatch").addEventListener("click", () => current && start(lastUrl || current.url, true));
+$("rewatch").addEventListener("click", async () => {
+  if (!current) return;
+  const id = current.id;
+  busy(true);
+  resetView();
+  try {
+    const { job } = await api("/api/watch", { video: id, coding: $("coding").checked });
+    await follow(job);
+  } catch (err) {
+    fail(err);
+  } finally {
+    busy(false);
+  }
+});
+
+function seek(t) {
+  const p = $("player");
+  if (p.hidden) return;
+  p.currentTime = t;
+  p.play().catch(() => {});
+}
 
 async function show(id) {
   const data = await api(`/api/videos/${encodeURIComponent(id)}`);
   current = data;
-  lastUrl = data.url;
   history.replaceState(null, "", `#v=${data.id}`);
 
   $("title").textContent = data.title;
   $("length").textContent = `${Math.floor(data.duration / 60)} min ${data.duration % 60} s`;
-  $("yt").href = data.url;
+  $("player").hidden = !data.playable;
+  if (data.playable) $("player").src = `/media/${encodeURIComponent(data.id)}`;
   $("frames-label").textContent = `${data.frames.length} frames kept`;
   $("strip").innerHTML = data.frames.map((s) =>
     `<button type="button" data-t="${s}" aria-label="Jump to ${stamp(s)}"><img loading="lazy" alt="" src="/frames/${esc(data.id)}/${String(s).padStart(5, "0")}.jpg"><span class="stamp">${stamp(s)}</span></button>`
@@ -333,13 +406,12 @@ async function show(id) {
 function render() {
   const items = current.entries.filter((e) =>
     filter === "all" || (filter === "speech" ? e.kind === "SPEECH" : e.kind !== "SPEECH"));
-  const base = current.url.includes("?") ? `${current.url}&` : `${current.url}?`;
   $("entries").innerHTML = items.length ? items.map((e) => {
     const body = e.kind === "TEXT"
       ? `<pre class="code">${esc(e.text.split(/\s*⏎\s*/).join("\n"))}</pre>`
       : esc(e.text);
     return `<li class="${e.kind.toLowerCase()}" data-t="${e.t}">
-      <a class="time" href="${esc(base)}t=${e.t}s" target="_blank" rel="noopener" title="Open on YouTube at ${stamp(e.t)}">${stamp(e.t)}</a>
+      <button type="button" class="time" data-seek="${e.t}" title="Play from ${stamp(e.t)}">${stamp(e.t)}</button>
       <span class="kind">${KIND[e.kind] || e.kind}</span>
       <div class="body">${body}</div></li>`;
   }).join("") : `<li><span></span><span></span><span class="empty">Nothing here. If there are no screen notes, check that GEMINI_API_KEY is set in .env.</span></li>`;
@@ -365,7 +437,12 @@ function jump(t) {
 
 $("strip").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-t]");
-  if (b) jump(Number(b.dataset.t));
+  if (b) { jump(Number(b.dataset.t)); seek(Number(b.dataset.t)); }
+});
+
+$("entries").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-seek]");
+  if (b) { seek(Number(b.dataset.seek)); $("player").scrollIntoView({ block: "nearest" }); }
 });
 
 // Chat
@@ -483,11 +560,11 @@ $("suggest").addEventListener("click", (e) => {
 
 $("messages").addEventListener("click", (e) => {
   const b = e.target.closest("button.ts");
-  if (b) jump(Number(b.dataset.t));
+  if (b) { jump(Number(b.dataset.t)); seek(Number(b.dataset.t)); }
 });
 
 $("copy").addEventListener("click", async () => {
-  const text = [`# ${current.title}`, current.url, "",
+  const text = [`# ${current.title}`, current.source, "",
     ...current.entries.map((e) => `[${stamp(e.t)}] ${e.kind.padEnd(7)} ${e.text}`)].join("\n");
   await navigator.clipboard.writeText(text);
   $("copy").textContent = "Copied";

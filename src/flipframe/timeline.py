@@ -36,7 +36,7 @@ def write(meta: dict, items: list[dict], frame_seconds: list[int], workdir: Path
     """Write timeline.json (for the web page) and timeline.md (for reading)."""
     duration = int(meta["duration"])
     data = {
-        "id": meta["id"], "title": meta["title"], "url": meta["url"],
+        "id": meta["id"], "title": meta["title"], "source": meta["source"],
         "duration": duration, "frames": frame_seconds, "entries": items,
     }
     (workdir / "timeline.json").write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -44,7 +44,7 @@ def write(meta: dict, items: list[dict], frame_seconds: list[int], workdir: Path
     lines = [
         f"# {meta['title']}",
         "",
-        f"- URL: {meta['url']}",
+        f"- File: {meta['source']}",
         f"- Length: {duration // 60} min {duration % 60} s",
         f"- Frames: {workdir / 'frames'} (named by second, e.g. 00252.jpg = 04:12)",
         "",
