@@ -86,6 +86,15 @@
 
   .label { font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); margin: 0 0 8px; }
 
+  #samples ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
+  #samples li { display: flex; align-items: center; gap: 12px; padding: 8px 2px; border-bottom: 1px solid var(--line); }
+  #samples .title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #samples li button {
+    flex-shrink: 0; background: none; border: 1px solid var(--line); border-radius: 6px;
+    padding: 3px 12px; font-size: 14px; cursor: pointer;
+  }
+  #samples li button:hover { border-color: var(--muted); }
+  #samples li button.done { background: var(--ink); color: var(--ground); border-color: var(--ink); }
   #recent ul { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--line); }
   #recent li button {
     width: 100%; display: flex; justify-content: space-between; gap: 16px;
@@ -184,7 +193,7 @@
 <body>
 <main>
   <header>
-    <span class="mark">FlipFrame</span>
+    <a class="mark" href="/" style="color:inherit;text-decoration:none">FlipFrame</a>
     <span class="tag">watch a video as text</span>
   </header>
 
@@ -201,6 +210,11 @@
     <div class="bar-track" id="upload-bar" hidden><div class="bar-fill" id="upload-fill"></div></div>
     <ul id="progress" style="margin-top:10px"></ul>
     <p id="error" class="error" hidden></p>
+  </section>
+
+  <section id="samples" hidden>
+    <p class="label">Test videos</p>
+    <ul></ul>
   </section>
 
   <section id="recent" hidden>
@@ -268,6 +282,37 @@ async function api(path, body) {
   return data;
 }
 
+async function loadSamples() {
+  const list = await api("/api/samples").catch(() => []);
+  const mb = (n) => `${(n / 1048576).toFixed(n < 10485760 ? 1 : 0)} MB`;
+  $("samples").querySelector("ul").innerHTML = list.map((v) => `<li>
+      <span class="title" title="${esc(v.name)}">${esc(v.name)}</span>
+      <span class="time">${mb(v.size)}</span>
+      ${v.video
+        ? `<button type="button" class="done" data-open="${esc(v.video)}">Open</button>`
+        : `<button type="button" data-sample="${esc(v.name)}">Process</button>`}
+    </li>`).join("");
+  $("samples").hidden = !list.length || !!current;
+}
+
+$("samples").addEventListener("click", async (e) => {
+  const open = e.target.closest("button[data-open]");
+  if (open) return show(open.dataset.open);
+  const b = e.target.closest("button[data-sample]");
+  if (!b || $("file").disabled) return;
+  busy(true);
+  resetView();
+  $("progress").innerHTML = `<li class="running">starting ${esc(b.dataset.sample)}</li>`;
+  try {
+    const { job } = await api("/api/samples", { name: b.dataset.sample, coding: $("coding").checked });
+    await follow(job);
+  } catch (err) {
+    fail(err);
+  } finally {
+    busy(false);
+  }
+});
+
 async function loadRecent() {
   const list = await api("/api/videos").catch(() => []);
   const ul = $("recent").querySelector("ul");
@@ -301,6 +346,7 @@ function resetView() {
   $("player").pause();
   $("result").hidden = true;
   $("recent").hidden = true;
+  $("samples").hidden = true;
   $("error").hidden = true;
   $("status").hidden = false;
   $("progress").innerHTML = "";
@@ -312,6 +358,7 @@ function fail(err) {
   $("error").textContent = `Couldn't process this video: ${err.message}`;
   $("error").hidden = false;
   loadRecent();
+  loadSamples();
 }
 
 function uploadFile(file) {
@@ -398,6 +445,7 @@ async function show(id) {
 
   $("status").hidden = true;
   $("recent").hidden = true;
+  $("samples").hidden = true;
   $("result").hidden = false;
   render();
   renderChat();
@@ -572,8 +620,8 @@ $("copy").addEventListener("click", async () => {
 });
 
 const fromHash = location.hash.match(/v=([\w-]+)/);
-if (fromHash) show(fromHash[1]).catch(loadRecent);
-else loadRecent();
+if (fromHash) show(fromHash[1]).catch(() => { loadRecent(); loadSamples(); });
+else { loadRecent(); loadSamples(); }
 </script>
 </body>
 </html>

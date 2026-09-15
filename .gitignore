@@ -6,3 +6,4 @@ cache/
 *.mp4
 *.webm
 .claude/settings.local.json
+test-videos/

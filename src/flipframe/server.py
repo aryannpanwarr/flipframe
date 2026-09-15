@@ -1,6 +1,7 @@
 """Local web page for FlipFrame."""
 
 import json
+import os
 import re
 import shutil
 import threading
@@ -14,10 +15,12 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from pydantic import BaseModel
 
-from . import CACHE, chat, has_key, load, run
+from . import CACHE, PROJECT, chat, has_key, load, run, source
 
 PAGE = Path(__file__).parent / "web" / "index.html"
 UPLOADS = CACHE / "uploads"
+SAMPLES = Path(os.environ.get("FLIPFRAME_SAMPLES", PROJECT / "test-videos"))
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 VIDEO_ID = re.compile(r"^[0-9a-f]{12}$")
 FRAME = re.compile(r"^\d{5}\.jpg$")
 
@@ -27,6 +30,11 @@ jobs: dict[str, dict] = {}
 
 class WatchRequest(BaseModel):
     video: str
+    coding: bool = False
+
+
+class SampleRequest(BaseModel):
+    name: str
     coding: bool = False
 
 
@@ -80,6 +88,28 @@ async def upload(request: Request, name: str, coding: bool = False) -> dict:
         shutil.rmtree(folder, ignore_errors=True)
         raise HTTPException(400, "The file was empty.")
     return {"job": _start_job(path, coding, force=False, upload=path)}
+
+
+@app.get("/api/samples")
+def samples() -> list[dict]:
+    """Video files in the test-videos folder, and whether each was processed already."""
+    if not SAMPLES.is_dir():
+        return []
+    found = []
+    for path in sorted(SAMPLES.iterdir()):
+        if path.is_file() and path.suffix.lower() in VIDEO_EXT:
+            key = source.video_key(path)
+            found.append({"name": path.name, "size": path.stat().st_size,
+                          "video": key if load(key) else None})
+    return found
+
+
+@app.post("/api/samples")
+def process_sample(req: SampleRequest) -> dict:
+    path = SAMPLES / Path(req.name).name
+    if Path(req.name).name != req.name or not path.is_file() or path.suffix.lower() not in VIDEO_EXT:
+        raise HTTPException(404, "No such test video")
+    return {"job": _start_job(path, req.coding, force=False)}
 
 
 @app.post("/api/watch")
