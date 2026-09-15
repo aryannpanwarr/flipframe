@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-CELL_W, CELL_H, GRID = 512, 288, 3
+SHEET_W, SHEET_H = 1536, 864  # about as large as the models accept without shrinking
 
 
 def stamp(seconds: int) -> str:
@@ -15,9 +15,12 @@ def seconds_of(frame: Path) -> int:
     return int(frame.stem)
 
 
-def build(frames: list[Path], out: Path) -> list[tuple[Path, list[int]]]:
-    """Return (sheet_path, seconds_on_sheet) for each sheet."""
+def build(frames: list[Path], out: Path, grid: int = 3) -> list[tuple[Path, list[int]]]:
+    """Tile frames grid x grid. Return (sheet_path, seconds_on_sheet) for each sheet."""
     out.mkdir(exist_ok=True)
+    for old in out.glob("sheet_*.jpg"):
+        old.unlink()
+    CELL_W, CELL_H, GRID = SHEET_W // grid, SHEET_H // grid, grid
     font = ImageFont.load_default(size=26)
     per = GRID * GRID
     sheets = []

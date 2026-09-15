@@ -6,10 +6,10 @@ from pathlib import Path
 from yt_dlp import YoutubeDL
 
 
-def fetch(url: str, workdir: Path) -> dict:
-    """Download 360p video (no audio) and English subtitles into workdir."""
+def fetch(url: str, workdir: Path, height: int = 360) -> dict:
+    """Download video (no audio, at most `height` pixels tall) and English subtitles."""
     opts = {
-        "format": "bv*[height<=360][ext=mp4]/bv*[height<=360]/wv*/w",
+        "format": f"bv*[height<={height}][ext=mp4]/bv*[height<={height}]/wv*/w",
         "outtmpl": str(workdir / "video.%(ext)s"),
         "writesubtitles": True,
         "writeautomaticsub": True,

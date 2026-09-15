@@ -20,7 +20,12 @@ def write(meta: dict, cues: list[tuple[float, str]], visuals: list[tuple[int, st
             chunk_start = int(t) if chunk_start is None else chunk_start
             words.append(text)
 
-    for t, kind, desc in visuals:
+    seen = set()
+    for t, kind, desc in sorted(visuals):
+        desc = desc.replace("`", "").strip()
+        if not desc or (kind, desc) in seen:  # the same code often shows on many frames
+            continue
+        seen.add((kind, desc))
         entries.append((t, 1, f"{kind:<7} {desc}"))
 
     minutes = int(meta["duration"]) // 60

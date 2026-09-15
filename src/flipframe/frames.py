@@ -7,7 +7,8 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-THUMB = 32
+THUMB_W, THUMB_H = 160, 90
+PIXEL_CHANGED = 24  # a pixel counts as changed if its brightness moved this much (0-255)
 
 # Speech that points at the screen: the payload is in the picture, not the words.
 POINTING = re.compile(
@@ -18,39 +19,41 @@ POINTING = re.compile(
 
 
 def thumbnails(video: Path) -> np.ndarray:
-    """One 32x32 grayscale thumbnail per second of video, shape (seconds, 32, 32)."""
+    """One 160x90 grayscale thumbnail per second of video, shape (seconds, 90, 160)."""
     raw = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(video),
-         "-vf", f"fps=1,scale={THUMB}:{THUMB},format=gray",
+         "-vf", f"fps=1,scale={THUMB_W}:{THUMB_H},format=gray",
          "-f", "rawvideo", "-"],
         capture_output=True, check=True,
     ).stdout
-    return np.frombuffer(raw, np.uint8).reshape(-1, THUMB, THUMB).astype(np.int16)
+    return np.frombuffer(raw, np.uint8).reshape(-1, THUMB_H, THUMB_W).astype(np.int16)
 
 
 def select(thumbs: np.ndarray, cues: list[tuple[float, str]],
            budget: int, threshold: float, max_gap: int) -> list[int]:
     """Pick the seconds worth looking at.
 
-    A frame is kept when it differs enough from the last *kept* frame (so slow
-    changes like typing still add up), when the speaker points at the screen,
-    or when nothing has been kept for max_gap seconds.
+    A frame is kept when enough of it differs from the last *kept* frame (so
+    slow changes like typing still add up), when the speaker points at the
+    screen, or when nothing has been kept for max_gap seconds. threshold is the
+    percent of pixels that must have changed: typing one line of code is ~0.5%.
     """
     pointing = {int(t) for t, text in cues if POINTING.search(text)}
-    kept: list[tuple[int, float]] = []  # (second, how much it changed)
+    kept: list[int] = []
     last = None
     for t, thumb in enumerate(thumbs):
         if thumb.mean() < 8:  # black frame / fade
             continue
-        change = 255.0 if last is None else float(np.abs(thumb - last).mean())
-        gap = t - kept[-1][0] if kept else max_gap
-        if change > threshold or gap >= max_gap or (t in pointing and gap >= 2):
-            kept.append((t, change))
+        changed = 100.0 if last is None else float((np.abs(thumb - last) > PIXEL_CHANGED).mean() * 100)
+        gap = t - kept[-1] if kept else max_gap
+        if changed > threshold or gap >= max_gap or (t in pointing and gap >= 2):
+            kept.append(t)
             last = thumb
 
-    if len(kept) > budget:  # over budget: keep the biggest changes
-        kept = sorted(kept, key=lambda k: -k[1])[:budget]
-    return sorted(t for t, _ in kept)
+    if len(kept) > budget:  # busy video: spread the budget evenly over time
+        step = len(kept) / budget
+        kept = [kept[int(i * step)] for i in range(budget)]
+    return kept
 
 
 def extract(video: Path, seconds: list[int], out: Path) -> list[Path]:

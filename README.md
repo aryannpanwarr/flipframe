@@ -9,7 +9,7 @@ plus the subtitles into a short, timestamped text timeline.
 
 ```bash
 uv sync
-export ANTHROPIC_API_KEY=...        # only needed for step 5
+# put GEMINI_API_KEY=... in .env (or ANTHROPIC_API_KEY for --provider claude)
 uv run flipframe watch "https://www.youtube.com/watch?v=VIDEO_ID"
 ```
 
@@ -19,22 +19,27 @@ Prints the path to `timeline.md`. Everything is cached in `~/.cache/flipframe/<v
 | Flag | Default | Meaning |
 |---|---|---|
 | `--budget` | 90 | max frames to keep |
-| `--threshold` | 12 | how different (0–255) a frame must be from the last kept one |
+| `--threshold` | 0.5 | percent of the picture that must change since the last kept frame |
 | `--max-gap` | 20 | always keep a frame at least every N seconds |
-| `--model` | `claude-haiku-4-5` | model that describes the frames |
+| `--height` | 360 | download resolution; use 720 for code or small text |
+| `--grid` | 3 | frames per sheet side; 2 shows each frame bigger |
+| `--provider` | `gemini` | `gemini` or `claude` |
+| `--model` | `gemini-3.5-flash-lite` / `claude-haiku-4-5` | override the model |
 | `--no-describe` | off | stop after contact sheets (no API key, no cost) |
 | `--force` | off | rebuild even if cached |
 
 Needs `ffmpeg` on your PATH.
 
+For coding videos: `--height 720 --grid 2` (otherwise small symbols like quote marks get lost).
+
 ## How it works
 
-1. **Download** a 360p copy (no audio) with `yt-dlp`
+1. **Download** a small copy (no audio) with `yt-dlp`
 2. **Subtitles**: grab YouTube's free captions
-3. **Pick frames**: shrink every second to a 32×32 thumbnail and keep a frame when it differs
-   from the last kept one, when the speaker points at the screen ("as you can see…"), or
+3. **Pick frames**: shrink every second to a 160×90 thumbnail and keep a frame when enough of it
+   differs from the last kept one, when the speaker points at the screen ("as you can see…"), or
    when nothing was kept for 20 s
-4. **Contact sheets**: tile kept frames 3×3 with timestamps burned in
+4. **Contact sheets**: tile kept frames 3×3 (or 2×2) with timestamps burned in
 5. **Describe** each sheet with a cheap model, told to skip what the subtitles already say
 6. **Timeline**: merge speech + visuals into `timeline.md`; frames stay on disk for close-ups
 
