@@ -136,8 +136,13 @@
   #messages { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; }
   #messages:empty { display: none; }
   .msg-user { font-weight: 500; }
-  .msg-model { white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg-model.pending::after { content: "…"; color: var(--muted); }
+  .msg-model { overflow-wrap: anywhere; display: grid; gap: 8px; }
+  .msg-model p { margin: 0; }
+  .msg-model .md-h { font-weight: 600; }
+  .msg-model ul.md { margin: 0; padding-left: 20px; display: grid; gap: 6px; }
+  .msg-model li.lvl2 { margin-left: 20px; list-style-type: circle; }
+  .msg-model .dash { color: var(--muted); padding: 0 2px; }
+  .msg-model.pending::after { content: "…"; color: var(--muted); line-height: 1; }
   .msg-model code { font-family: var(--mono); font-size: 13px; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
   .ts {
     background: var(--stamp); color: var(--stamp-ink); border: 0; border-radius: 3px;
@@ -378,12 +383,44 @@ function saveChat(id) {
   try { localStorage.setItem(storeKey(id), JSON.stringify(chats[id].slice(-40))); } catch {}
 }
 
-function formatAnswer(text) {
-  return esc(text)
+function chip(t) {
+  const [m, sec] = t.split(":");
+  return `<button type="button" class="ts" data-t="${Number(m) * 60 + Number(sec)}">${m.padStart(2, "0")}:${sec}</button>`;
+}
+
+// Inline markdown on already-escaped text: code, bold, italic, [MM:SS] and [MM:SS–MM:SS].
+function inline(s) {
+  return s
     .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[(\d{1,2}):([0-5]\d)\]/g, (_, m, sec) =>
-      `<button type="button" class="ts" data-t="${Number(m) * 60 + Number(sec)}">${m.padStart(2, "0")}:${sec}</button>`);
+    .replace(/(^|[^*\w])[*_]([^*_\n]+)[*_](?![*\w])/g, "$1<em>$2</em>")
+    .replace(/\[(\d{1,2}:[0-5]\d)(?:\s*[–—-]\s*(\d{1,2}:[0-5]\d))?\]/g,
+      (_, a, b) => b ? `${chip(a)}<span class="dash">–</span>${chip(b)}` : chip(a));
+}
+
+// Small markdown renderer: paragraphs, headings, and bullet or numbered lists (two indent levels).
+function formatAnswer(text) {
+  let html = "", para = [], inList = false;
+  const flush = () => { if (para.length) { html += `<p>${inline(esc(para.join(" ")))}</p>`; para = []; } };
+  for (const raw of text.replace(/\r/g, "").split("\n")) {
+    const item = raw.match(/^(\s*)(?:[*\-•+]|(\d+[.)]))\s+(.*)$/);
+    if (item) {
+      flush();
+      if (!inList) { html += '<ul class="md">'; inList = true; }
+      const level = item[1].replace(/\t/g, "  ").length >= 2 ? 2 : 1;
+      const body = (item[2] ? `${item[2]} ` : "") + item[3];
+      html += `<li class="lvl${level}">${inline(esc(body))}</li>`;
+      continue;
+    }
+    if (!raw.trim()) { flush(); continue; }
+    if (inList) { html += "</ul>"; inList = false; }
+    const heading = raw.match(/^#{1,6}\s+(.*)$/);
+    if (heading) { flush(); html += `<p class="md-h">${inline(esc(heading[1]))}</p>`; continue; }
+    para.push(raw.trim());
+  }
+  flush();
+  if (inList) html += "</ul>";
+  return html;
 }
 
 function renderChat(pending = false) {

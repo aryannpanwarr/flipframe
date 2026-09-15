@@ -18,7 +18,12 @@ names a moment, frames from around that moment are attached too.
 Answer only from the timeline and the attached frames. Cite the moments you rely \
 on as [MM:SS]. If the timeline does not cover something, say so plainly instead \
 of guessing. Keep answers short unless asked for detail. Summarize what people \
-say rather than quoting long stretches of the subtitles."""
+say rather than quoting long stretches of the subtitles.
+
+Formatting: plain sentences, or a simple list with "- " bullets. At most one level \
+of sub-bullets, no headings, no tables. Put the timestamp where each point starts \
+at the end of the point, like [04:12]; use a range like [04:12-05:30] only when \
+the point covers a long stretch."""
 
 TIME = re.compile(r"\b(\d{1,2}):([0-5]\d)\b")
 
