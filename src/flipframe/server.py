@@ -80,16 +80,17 @@ ISOLATION = {"Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder
 
 
 @app.get("/", response_class=HTMLResponse)
+@app.get("/about", response_class=HTMLResponse)
+def landing_page() -> HTMLResponse:
+    """What FlipFrame is and how to use it."""
+    return page("landing.html")
+
+
+@app.get("/app", response_class=HTMLResponse)
 @app.get("/share", response_class=HTMLResponse)
 def share_page() -> HTMLResponse:
     """The tool: picks frames on this device, nothing is uploaded."""
     return page("share.html", ISOLATION)
-
-
-@app.get("/about", response_class=HTMLResponse)
-def about_page() -> HTMLResponse:
-    """What FlipFrame is and how to use it."""
-    return page("landing.html")
 
 
 @app.get("/local", response_class=HTMLResponse)
@@ -218,7 +219,7 @@ def frame(video_id: str, name: str) -> FileResponse:
 
 def start(port: int, open_browser: bool = True) -> None:
     url = f"http://127.0.0.1:{port}"
-    print(f"FlipFrame   {url}\nAbout page  {url}/about\nLocal tools {url}/local")
+    print(f"FlipFrame   {url}\nThe tool    {url}/app\nLocal tools {url}/local")
     if open_browser:
         threading.Thread(target=lambda: (time.sleep(1), webbrowser.open(url)), daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
