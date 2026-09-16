@@ -4,228 +4,228 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlipFrame — let an AI chat watch your video</title>
-<meta name="description" content="Turn a video into sharp pictures and a transcript, in one PDF you can hand to Claude or ChatGPT. Runs in your browser; the video never leaves your device.">
+<meta name="description" content="Turn a video into sharp frames and a transcript, in one PDF you can hand to Claude or ChatGPT. Runs in your browser; the video never leaves your device.">
 <style>
   :root {
+    /* spacing, all multiples of 8 */
+    --s1: 0.5rem; --s2: 1rem; --s3: 1.5rem; --s4: 2rem; --s6: 3rem; --s8: 4rem; --s12: 6rem;
+
+    /* type scale */
+    --step--1: 0.8125rem;
+    --step-0: clamp(0.95rem, 0.2vw + 0.9rem, 1.0625rem);
+    --step-1: clamp(1.05rem, 0.35vw + 0.95rem, 1.2rem);
+    --step-3: clamp(2rem, 3.4vw + 1rem, 3.25rem);
+
     --ground: #f5f5f3;
     --surface: #ffffff;
-    --ink: #18191b;
-    --muted: #6e7075;
-    --line: #e2e2df;
+    --ink: #17181a;
+    --muted: #6b6e73;
+    --line: #e3e3e0;
     --stamp: #f2c200;
-    --stamp-ink: #18191b;
+    --stamp-ink: #17181a;
     --focus: #b38f00;
     --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --ground: #121314; --surface: #1a1b1d; --ink: #ededeb;
-      --muted: #8e9096; --line: #2a2c2f; --focus: #f2c200;
+      --ground: #111214; --surface: #191a1c; --ink: #ececea;
+      --muted: #8d9096; --line: #27292c; --focus: #f2c200;
     }
   }
   :root[data-theme="dark"] {
-    --ground: #121314; --surface: #1a1b1d; --ink: #ededeb;
-    --muted: #8e9096; --line: #2a2c2f; --focus: #f2c200;
+    --ground: #111214; --surface: #191a1c; --ink: #ececea;
+    --muted: #8d9096; --line: #27292c; --focus: #f2c200;
   }
 
   * { box-sizing: border-box; }
-  html, body { margin: 0; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
-    background: var(--ground); color: var(--ink);
-    font: clamp(15px, 0.4vw + 14px, 17px)/1.65 var(--sans);
-    padding-inline: clamp(20px, 5vw, 48px); padding-block: 28px clamp(56px, 8vw, 96px);
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: var(--step-0)/1.6 var(--sans);
   }
-  main {
-    max-width: 1040px; margin: 0 auto;
-    display: grid; grid-template-columns: minmax(0, 1fr);
-    gap: clamp(48px, 7vw, 80px);
-  }
-  main > * { min-width: 0; }
+  img { max-width: 100%; height: auto; display: block; }
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
 
-  nav { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
-  .mark { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
-  nav a { color: var(--muted); font-size: 14px; text-decoration: none; }
-  nav a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
-  nav .spacer { margin-left: auto; }
+  .wrap { width: min(100%, 64rem); margin-inline: auto; padding-inline: var(--s3); }
+  section { padding-block: var(--s8); border-top: 1px solid var(--line); }
+  .hero { border-top: 0; }
 
-  .hero { display: grid; gap: 20px; padding-block: clamp(8px, 4vw, 40px); }
+  .bar { display: flex; align-items: center; gap: var(--s2); padding-block: var(--s3); }
+  .mark { font-weight: 600; letter-spacing: -0.01em; }
+  .bar nav { margin-left: auto; display: flex; gap: var(--s3); }
+  .bar a { color: var(--muted); font-size: var(--step--1); text-decoration: none; }
+  .bar a:hover { color: var(--ink); }
+
   h1 {
-    font-size: clamp(32px, 5.2vw, 54px); line-height: 1.08; font-weight: 600;
-    letter-spacing: -0.03em; margin: 0; text-wrap: balance; max-width: 16ch;
+    font-size: var(--step-3); line-height: 1.05; font-weight: 600; letter-spacing: -0.03em;
+    margin: 0 0 var(--s3); max-width: 14ch; text-wrap: balance;
   }
-  .lead { font-size: clamp(16px, 0.5vw + 15px, 19px); color: var(--muted); margin: 0; max-width: 62ch; }
+  .lead { font-size: var(--step-1); color: var(--muted); margin: 0 0 var(--s4); max-width: 54ch; }
   .lead strong { color: var(--ink); font-weight: 500; }
-  .cta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; }
+  .cta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2) var(--s3); }
   .button {
-    background: var(--ink); color: var(--ground); border: 0; border-radius: 9px;
-    padding: 13px 22px; font-weight: 500; font-size: 16px; text-decoration: none; display: inline-block;
+    background: var(--ink); color: var(--ground); border-radius: 0.5rem;
+    padding: 0.75rem 1.5rem; font-weight: 500; text-decoration: none;
   }
-  .button:hover { opacity: 0.9; }
-  .aside { color: var(--muted); font-size: 14px; }
+  .button:hover { opacity: 0.88; }
+  .fine { color: var(--muted); font-size: var(--step--1); }
 
-  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 18px; font-weight: 500; }
-  section > p:last-child { margin-bottom: 0; }
+  h2 {
+    font-size: var(--step--1); text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); font-weight: 500; margin: 0 0 var(--s4);
+  }
+  h3 { font-size: 1rem; font-weight: 500; margin: 0 0 var(--s1); }
+  p { margin: 0; }
 
-  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: step; }
-  .steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; align-items: start; }
-  @media (min-width: 860px) {
-    .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 36px; }
-    .steps li { grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; }
-    .facts { gap: 28px 36px; }
-    h2 { margin-bottom: 24px; }
+  .grid { display: grid; gap: var(--s4); }
+  .grid p { color: var(--muted); }
+  @media (min-width: 52rem) {
+    .cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4) var(--s6); }
+    .cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s4) var(--s6); }
+    section { padding-block: var(--s12); }
   }
-  .steps li::before {
-    counter-increment: step; content: counter(step);
-    font: 500 13px/28px var(--mono); text-align: center;
-    width: 28px; height: 28px; border-radius: 50%;
-    background: var(--stamp); color: var(--stamp-ink);
-  }
-  .steps h3 { font-size: 16px; font-weight: 500; margin: 3px 0 2px; }
-  .steps p { margin: 0; color: var(--muted); font-size: 15px; }
 
-  .examples { display: grid; gap: clamp(26px, 4vw, 40px); align-items: start; }
-  .example { display: grid; align-content: start; gap: 0; }
-  .page-shot { height: 100%; align-content: start; }
-  .example > h3 { font-size: 15px; font-weight: 500; margin: 0 0 8px; }
-  .example > h3 span { color: var(--muted); font-weight: 400; }
-  .page-shot {
-    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
-    padding: 18px; display: grid; gap: 10px;
+  .steps { list-style: none; margin: 0; padding: 0; counter-reset: step; }
+  .steps li { align-content: start; }
+  .num {
+    counter-increment: step; display: grid; place-items: center;
+    width: 1.75rem; height: 1.75rem; border-radius: 50%; margin-bottom: var(--s2);
+    background: var(--stamp); color: var(--stamp-ink); font: 500 var(--step--1)/1 var(--mono);
   }
-  .page-shot .head { display: flex; align-items: baseline; gap: 10px; }
+  .num::before { content: counter(step); }
+
+  .panel {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 0.75rem;
+    padding: var(--s3); display: grid; gap: var(--s2); align-content: start;
+  }
+  .panel-head { display: flex; align-items: center; gap: var(--s1); flex-wrap: wrap; }
   .badge {
     background: var(--stamp); color: var(--stamp-ink);
-    font: 500 12px/1 var(--mono); padding: 4px 6px; border-radius: 3px;
+    font: 500 var(--step--1)/1 var(--mono); padding: 0.25rem 0.375rem; border-radius: 0.25rem;
   }
-  .page-shot .note { color: var(--muted); font-size: 13px; }
-  #example-frame { width: 100%; border-radius: 6px; display: block; }
+  .note { color: var(--muted); font-size: var(--step--1); }
+  .shot { border-radius: 0.5rem; overflow: hidden; background: #000; aspect-ratio: 16 / 10; max-width: 34rem; }
+  .shot img { width: 100%; height: 100%; object-fit: cover; }
   .screen {
-    background: #1e1f22; border-radius: 6px; padding: clamp(14px, 2vw, 22px);
-    font-family: var(--mono); font-size: clamp(12.5px, 0.3vw + 12px, 14.5px);
-    line-height: 1.7; color: #d7dae0; overflow-x: auto;
+    background: #1e1f22; border-radius: 0.5rem; padding: var(--s2);
+    font: var(--step--1)/1.75 var(--mono); color: #d7dae0; overflow: auto;
+    aspect-ratio: 16 / 10; display: grid; align-content: center;
   }
   .screen .kw { color: #cf8e6d; }
   .screen .fn { color: #56a8f5; }
-  .screen .num { color: #2aacb8; }
+  .screen .lit { color: #2aacb8; }
   .screen .out { color: #6aab73; }
-  .said { font-size: 14px; color: var(--muted); display: grid; gap: 3px; }
-  .said code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+  .said { display: grid; gap: 0.25rem; font-size: var(--step--1); color: var(--muted); }
+  .said code { font-family: var(--mono); color: var(--ink); }
 
-  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 20px; }
-  .facts h3 { font-size: 15px; font-weight: 500; margin: 0 0 4px; }
-  .facts p { margin: 0; color: var(--muted); font-size: 14.5px; }
-
-  footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 20px; }
+  footer {
+    border-top: 1px solid var(--line); padding-block: var(--s4) var(--s8);
+    color: var(--muted); font-size: var(--step--1);
+  }
   footer a { text-underline-offset: 3px; }
 </style>
 </head>
 <body>
-<main>
-  <nav>
+<div class="wrap">
+  <header class="bar">
     <span class="mark">FlipFrame</span>
-    <span class="aside">watch a video, as text and pictures</span>
-    <a class="spacer" href="/local">Local tools</a>
-    <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source</a>
-  </nav>
+    <span class="fine">watch a video, as text and pictures</span>
+    <nav>
+      <a href="/local">Local tools</a>
+      <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source</a>
+    </nav>
+  </header>
 
-  <header class="hero">
+  <section class="hero">
     <h1>Let an AI chat watch your video.</h1>
-    <p class="lead">Claude and ChatGPT can read text and look at pictures, but they can't watch video.
-      FlipFrame turns a video into the handful of frames that actually carry information, plus a
-      transcript, and gives you <strong>one PDF to drop into the chat</strong>.</p>
+    <p class="lead">Claude and ChatGPT read text and look at pictures, but they can't watch video.
+      FlipFrame keeps the handful of frames that carry the information, writes down the speech, and
+      gives you <strong>one PDF to drop into the chat</strong>.</p>
     <div class="cta">
       <a class="button" href="/app">Open FlipFrame</a>
-      <span class="aside">Free. Nothing to install. The video never leaves your device.</span>
+      <span class="fine">Free. Nothing to install. The video never leaves your device.</span>
     </div>
-  </header>
+  </section>
 
   <section>
     <h2>How it works</h2>
-    <ol class="steps">
+    <ol class="grid cols-3 steps">
       <li>
-        <div>
-          <h3>Pick a video</h3>
-          <p>From your phone or computer. It is read in the page, not uploaded anywhere.</p>
-        </div>
+        <span class="num"></span>
+        <h3>Pick a video</h3>
+        <p>From your phone or computer. It is read inside the page, not uploaded anywhere.</p>
       </li>
       <li>
-        <div>
-          <h3>Your browser does the work</h3>
-          <p>It keeps only the moments where the picture changed, crops each one to the part that
-            changed, and writes down the speech — either with Whisper running on your device, or
-            through Google with your own key.</p>
-        </div>
+        <span class="num"></span>
+        <h3>Your browser does the work</h3>
+        <p>It keeps the moments where the picture changed, crops each to the part that changed, and
+          writes down the speech — on your device, or through Google with your own key.</p>
       </li>
       <li>
-        <div>
-          <h3>Share the PDF and ask</h3>
-          <p>One page per moment: the close-up, then what was said until the next one. The first page
-            tells the model how to read it, so you just ask your question.</p>
-        </div>
+        <span class="num"></span>
+        <h3>Share it and ask</h3>
+        <p>One page per moment: the close-up, then what was said until the next one. The first page
+          tells the model how to read it.</p>
       </li>
     </ol>
   </section>
 
   <section>
     <h2>What a page looks like</h2>
-    <div class="examples">
-    <div class="example">
-      <h3>A coding tutorial <span>— the code on screen is the content</span></h3>
-      <div class="page-shot">
-      <div class="head">
-        <span class="badge">02:47</span>
-        <span class="note">close-up of the part of the screen that changed</span>
-      </div>
-      <div class="screen"><span class="out">doubles</span> = [x * <span class="num">2</span> <span class="kw">for</span> x <span class="kw">in</span> <span class="fn">range</span>(<span class="num">1</span>, <span class="num">11</span>)]
+    <div class="grid cols-2">
+      <div class="panel">
+        <div class="panel-head">
+          <span class="badge">02:47</span>
+          <span class="note">close-up of the part that changed</span>
+        </div>
+        <div class="screen"><span class="out">doubles</span> = [x * <span class="lit">2</span> <span class="kw">for</span> x <span class="kw">in</span> <span class="fn">range</span>(<span class="lit">1</span>, <span class="lit">11</span>)]
 <span class="fn">print</span>(doubles)
 
 <span class="out">[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]</span></div>
-      <div class="said">
-        <span>Said here:</span>
-        <span><code>[02:47]</code> During each iteration, take x and multiply it by two.</span>
-        <span><code>[02:52]</code> Then print the list of doubles.</span>
+        <div class="said">
+          <span class="note">Said here:</span>
+          <span><code>[02:47]</code> Take x, multiply it by two, and return it.</span>
+          <span><code>[02:52]</code> Then print the list of doubles.</span>
+        </div>
+        <p class="note">A coding tutorial: the code on screen is the content.</p>
       </div>
-      </div>
-    </div>
 
-    <div class="example">
-      <h3>A gameplay clip <span>— no narration, so the screen carries everything</span></h3>
-      <div class="page-shot">
-        <div class="head">
+      <div class="panel" id="gameplay">
+        <div class="panel-head">
           <span class="badge">00:08</span>
           <span class="note">full frame</span>
         </div>
-        <img id="example-frame" src="/example-frame.jpg"
-             alt="A frame from a gameplay video: an area name appears on screen over a ruined stone courtyard, with health and stamina bars and item slots at the edges">
-        <div class="said">
-          <span>Nothing said between this moment and the next.</span>
-          <span class="note">The picture still carries the information: the area name on screen, the
-            health and stamina bars, the items in hand and the count in the corner.</span>
+        <div class="shot">
+          <img id="example-frame" src="/example-frame.jpg" width="1600" height="984"
+               alt="A frame from a gameplay video: an area name appears on screen over a ruined stone courtyard, with health bars and item slots at the edges">
         </div>
+        <div class="said">
+          <span class="note">Nothing said between this moment and the next.</span>
+        </div>
+        <p class="note">A gameplay clip: no narration, so the screen carries everything — the area
+          name, the bars, the items in hand.</p>
       </div>
-    </div>
     </div>
   </section>
 
   <section>
     <h2>Worth knowing</h2>
-    <div class="facts">
+    <div class="grid cols-2">
       <div>
         <h3>Private by default</h3>
         <p>Frames are cut in your browser. Speech can run on your device too, using a bundled Whisper
-          model. Nothing is uploaded unless you choose Google for speech, and then only the audio.</p>
+          model. Nothing is uploaded unless you pick Google for speech, and then only the audio.</p>
       </div>
       <div>
         <h3>Good at screens and slides</h3>
-        <p>Screencasts, tutorials, lectures and gameplay work well, because what matters sits still
-          long enough to be caught in a frame.</p>
+        <p>Screencasts, tutorials, lectures and gameplay work well, because what matters stays on
+          screen long enough to land in a frame.</p>
       </div>
       <div>
         <h3>Weak at motion</h3>
-        <p>Sport, dance and physical demos lose the movement between frames. You get where things
+        <p>Sport, dance and physical demos lose the movement between frames. You learn where things
           happened, not how they moved.</p>
       </div>
       <div>
@@ -237,16 +237,17 @@
   </section>
 
   <footer>
-    <p>Built with ffmpeg, Whisper and Gemini. <a href="/app">Open the tool</a> ·
+    <p>Built with ffmpeg, Whisper and Gemini.
+      <a href="/app">Open the tool</a> ·
       <a href="/local">Local pipeline</a> ·
       <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source on GitHub</a></p>
   </footer>
-</main>
-<script>
-  // Both pictures come from web/local/. Without one, drop its panel rather than leave a gap.
-  const frame = document.getElementById("example-frame");
-  frame.onerror = () => frame.closest(".example").remove();
+</div>
 
+<script>
+  // The gameplay panel needs its picture; without one, drop the panel rather than leave a gap.
+  const frame = document.getElementById("example-frame");
+  frame.onerror = () => document.getElementById("gameplay").remove();
 </script>
 </body>
 </html>
