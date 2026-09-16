@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlipFrame — share a video with Claude or ChatGPT</title>
+<script src="vendor/lame.min.js"></script>
 <style>
   :root {
     --ground: #f5f5f3;
@@ -85,6 +86,17 @@
   .sheets img { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; background: #000; }
   .sheets figcaption { font-family: var(--mono); font-size: 12px; color: var(--muted); }
 
+  .key-row { display: grid; gap: 6px; margin-top: 12px; }
+  .key-row input {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px 12px; width: 100%;
+  }
+  .key-row .hint a { color: inherit; }
+  pre.transcript {
+    font-family: var(--mono); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap;
+    background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
+    padding: 12px; margin: 0; max-height: 260px; overflow-y: auto;
+  }
   pre.prompt {
     font-family: var(--mono); font-size: 12.5px; line-height: 1.6; white-space: pre-wrap;
     overflow-wrap: anywhere; background: var(--surface); border: 1px solid var(--line);
@@ -109,6 +121,7 @@
     </label>
     <div class="options" style="margin-top:12px">
       <label><input id="coding" type="checkbox"> Code or small text on screen</label>
+      <label><input id="speech" type="checkbox" checked> Transcribe the speech</label>
       <label>Detail
         <select id="budget">
           <option value="45">Light (45 frames)</option>
@@ -116,6 +129,12 @@
           <option value="144">Heavy (144 frames)</option>
         </select>
       </label>
+    </div>
+    <div class="key-row" id="key-row">
+      <input id="key" type="password" placeholder="Google Gemini API key (for transcribing speech)" autocomplete="off">
+      <p class="hint">Stored only in this browser, and sent only to Google. Get one free at
+        <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
+        Without a key you still get the pictures, just no speech.</p>
     </div>
   </section>
 
@@ -134,6 +153,10 @@
       <button class="secondary" id="copy" type="button">Copy prompt</button>
     </div>
     <ol class="steps" id="steps" style="margin-top:12px"></ol>
+    <div style="margin-top:20px" id="transcript-box" hidden>
+      <p class="label" id="transcript-label">Transcript</p>
+      <pre class="transcript" id="transcript"></pre>
+    </div>
     <div style="margin-top:20px">
       <p class="label">Prompt to send with the pictures</p>
       <pre class="prompt" id="prompt"></pre>
@@ -276,6 +299,104 @@ async function buildSheets(video, seconds, grid) {
   return sheets;
 }
 
+const AUDIO_RATE = 16000;         // what speech models expect
+const CHUNK_SECONDS = 300;        // 5-minute pieces, transcribed in parallel
+const AT_ONCE = 3;                // parallel requests, gentle on rate limits
+const TRANSCRIBE_MODEL = "gemini-3.5-flash-lite";
+const ASK = `Transcribe all speech in this audio clip, in its original language.
+
+Output one line per sentence or short phrase, formatted exactly as:
+MM:SS text
+where MM:SS is when that phrase starts, counted from the start of this clip.
+
+Output nothing else: no title, no notes, no speaker labels unless a name is spoken. If there is no speech, output nothing.`;
+
+// Decode the file's audio track and resample it to mono 16 kHz.
+async function readAudio(file) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  let decoded;
+  try {
+    decoded = await ctx.decodeAudioData(await file.arrayBuffer());
+  } finally {
+    ctx.close();
+  }
+  if (!decoded.duration) throw new Error("no audio track");
+  const offline = new OfflineAudioContext(1, Math.ceil(decoded.duration * AUDIO_RATE), AUDIO_RATE);
+  const src = offline.createBufferSource();
+  src.buffer = decoded;
+  src.connect(offline.destination);
+  src.start();
+  return (await offline.startRendering()).getChannelData(0);
+}
+
+function encodeMp3(samples) {
+  const encoder = new lamejs.Mp3Encoder(1, AUDIO_RATE, 32);
+  const pcm = new Int16Array(samples.length);
+  for (let i = 0; i < samples.length; i++) {
+    const v = Math.max(-1, Math.min(1, samples[i]));
+    pcm[i] = v < 0 ? v * 0x8000 : v * 0x7fff;
+  }
+  const parts = [];
+  for (let i = 0; i < pcm.length; i += 1152) {
+    const block = encoder.encodeBuffer(pcm.subarray(i, i + 1152));
+    if (block.length) parts.push(block);
+  }
+  const end = encoder.flush();
+  if (end.length) parts.push(end);
+  return new Blob(parts, { type: "audio/mpeg" });
+}
+
+function toBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(binary);
+}
+
+async function transcribeChunk(key, blob, offset, length) {
+  const body = {
+    contents: [{ parts: [
+      { inline_data: { mime_type: "audio/mpeg", data: toBase64(await blob.arrayBuffer()) } },
+      { text: ASK },
+    ] }],
+    generationConfig: { maxOutputTokens: 16000 },
+  };
+  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${TRANSCRIBE_MODEL}:generateContent?key=${encodeURIComponent(key)}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error?.message || `Google returned ${res.status}`);
+  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+  const lines = [];
+  for (const raw of text.split("\n")) {
+    const m = raw.trim().match(/^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?\s*[-–|:]?\s*(.+)$/);
+    if (m) lines.push({ t: offset + Math.min(Number(m[1]) * 60 + Number(m[2]), length), text: m[3].trim() });
+  }
+  return lines;
+}
+
+async function transcribe(file, key) {
+  setProgress(0.62, "reading the audio…");
+  const samples = await readAudio(file);
+  const perChunk = CHUNK_SECONDS * AUDIO_RATE;
+  const chunks = [];
+  for (let i = 0; i < samples.length; i += perChunk) {
+    setProgress(0.62 + (i / samples.length) * 0.18, `packing audio ${Math.floor(i / perChunk) + 1}…`);
+    chunks.push({ blob: encodeMp3(samples.subarray(i, i + perChunk)), offset: Math.round(i / AUDIO_RATE) });
+    await new Promise((r) => setTimeout(r));   // let the page repaint
+  }
+
+  const lines = [];
+  let done = 0;
+  for (let i = 0; i < chunks.length; i += AT_ONCE) {
+    const batch = chunks.slice(i, i + AT_ONCE);
+    const results = await Promise.all(batch.map((c) => transcribeChunk(key, c.blob, c.offset, CHUNK_SECONDS)));
+    results.forEach((r) => lines.push(...r));
+    done += batch.length;
+    setProgress(0.8 + (done / chunks.length) * 0.2, `transcribing ${done} of ${chunks.length} piece(s)…`);
+  }
+  return lines.sort((a, b) => a.t - b.t);
+}
+
 function promptFor(name, duration, sheets, grid) {
   const times = sheets.flatMap((s) => s.seconds).map(stamp).join(", ");
   return `These images are frames from a video I can't paste directly: "${name}" (${stamp(duration)} long).
@@ -284,7 +405,7 @@ Each image is a contact sheet holding up to ${grid * grid} frames in order, left
 
 Frames were kept only where the picture changed, so still stretches are skipped. Frames shown: ${times}.
 
-There is no audio here, so work from what is on screen. When you answer, cite the timestamps you used.
+When you answer, cite the timestamps you used.
 
 My question: `;
 }
@@ -306,8 +427,22 @@ async function process(file) {
     if (!seconds.length) throw new Error("No usable frames found. Is the video all black?");
     const sheets = await buildSheets(video, seconds, grid);
 
+    let transcript = [];
+    const key = $("key").value.trim();
+    if ($("speech").checked && key) {
+      try {
+        transcript = await transcribe(file, key);
+      } catch (err) {
+        $("error").textContent = `Pictures are ready, but the speech failed: ${err.message}`;
+        $("error").hidden = false;
+      }
+    }
+
     const duration = Math.floor(video.duration);
-    result = { name: file.name, duration, sheets, grid, prompt: promptFor(file.name, duration, sheets, grid) };
+    const spoken = transcript.map((l) => `[${stamp(l.t)}] ${l.text}`).join("\n");
+    result = { name: file.name, duration, sheets, grid, transcript, spoken,
+               prompt: promptFor(file.name, duration, sheets, grid)
+                 + (spoken ? `\n\nWhat is said in the video:\n${spoken}\n\nMy question: ` : "") };
     showResult();
   } catch (err) {
     $("error").textContent = err.message;
@@ -321,13 +456,24 @@ async function process(file) {
 }
 
 function files() {
-  return result.sheets.map((s) => new File([s.blob], `${result.name.replace(/\.[^.]+$/, "")} sheet ${s.index}.jpg`, { type: "image/jpeg" }));
+  const base = result.name.replace(/\.[^.]+$/, "");
+  const out = result.sheets.map((s) => new File([s.blob], `${base} sheet ${s.index}.jpg`, { type: "image/jpeg" }));
+  if (result.spoken) {
+    out.push(new File([`${result.name}\n\n${result.spoken}\n`], `${base} transcript.txt`, { type: "text/plain" }));
+  }
+  return out;
 }
 
 function showResult() {
   const total = result.sheets.reduce((n, s) => n + s.seconds.length, 0);
-  $("summary").textContent = `${total} frames from ${stamp(result.duration)} → ${result.sheets.length} image${result.sheets.length > 1 ? "s" : ""}`;
+  $("summary").textContent = `${total} frames from ${stamp(result.duration)} → ${result.sheets.length} image${result.sheets.length > 1 ? "s" : ""}`
+    + (result.spoken ? ` + transcript` : "");
   $("prompt").textContent = result.prompt;
+  $("transcript-box").hidden = !result.spoken;
+  if (result.spoken) {
+    $("transcript-label").textContent = `Transcript (${result.transcript.length} lines)`;
+    $("transcript").textContent = result.spoken;
+  }
   $("sheets-label").textContent = `Contact sheets (${result.sheets.length})`;
   $("sheets").innerHTML = "";
   for (const s of result.sheets) {
@@ -378,6 +524,11 @@ $("copy").addEventListener("click", async () => {
   await navigator.clipboard.writeText(result.prompt);
   $("copy").textContent = "Copied";
   setTimeout(() => ($("copy").textContent = "Copy prompt"), 1500);
+});
+
+try { $("key").value = localStorage.getItem("flipframe-key") || ""; } catch {}
+$("key").addEventListener("change", () => {
+  try { localStorage.setItem("flipframe-key", $("key").value.trim()); } catch {}
 });
 
 $("file").addEventListener("change", () => $("file").files[0] && process($("file").files[0]));

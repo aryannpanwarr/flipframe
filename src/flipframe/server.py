@@ -13,6 +13,7 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import CACHE, PROJECT, chat, has_key, load, run, source
@@ -26,6 +27,7 @@ VIDEO_ID = re.compile(r"^[0-9a-f]{12}$")
 FRAME = re.compile(r"^\d{5}\.jpg$")
 
 app = FastAPI()
+app.mount("/vendor", StaticFiles(directory=WEB / "vendor"), name="vendor")
 jobs: dict[str, dict] = {}
 
 
