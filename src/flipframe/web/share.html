@@ -137,6 +137,12 @@
           <option value="whisper-base.en">Better (77 MB)</option>
         </select>
       </label>
+      <label>Give me
+        <select id="output">
+          <option value="pdf" selected>One PDF</option>
+          <option value="files">Images + text (sharper)</option>
+        </select>
+      </label>
       <label>Detail
         <select id="budget">
           <option value="20">Light (20 moments)</option>
@@ -169,8 +175,8 @@
   <section id="result" hidden>
     <p class="label" id="summary"></p>
     <div class="actions">
-      <button class="primary" id="share" hidden type="button">Share the PDF</button>
-      <button class="secondary" id="download" type="button">Download PDF</button>
+      <button class="primary" id="share" hidden type="button">Share</button>
+      <button class="secondary" id="download" type="button">Download</button>
       <button class="secondary" id="copy" type="button">Copy prompt</button>
     </div>
     <ol class="steps" id="steps" style="margin-top:12px"></ol>
@@ -312,8 +318,13 @@ async function pickMoments(video, budget) {
 
   // Grab the picture a beat after the change, so typing has finished rather than caught mid-word.
   return chosen.map((moment, i) => {
-    const next = chosen[i + 1] ? chosen[i + 1].t : duration + 1;
-    return { ...moment, shot: Math.min(moment.t + 1, Math.max(moment.t, next - 1)), until: next };
+    const next = chosen[i + 1] ? chosen[i + 1].t : Infinity;
+    return {
+      ...moment,
+      from: i === 0 ? 0 : moment.t,                 // speech before the first moment still belongs somewhere
+      until: next,
+      shot: Math.min(moment.t + 1, Math.max(moment.t, (next === Infinity ? duration : next) - 1)),
+    };
   });
 }
 
@@ -331,7 +342,7 @@ async function buildFrames(video, moments) {
     canvas.width = Math.round(sw * scale); canvas.height = Math.round(sh * scale);
     ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.88));
-    out.push({ ...m, blob, cropped: !!m.box });
+    out.push({ ...m, blob, cropped: !!m.box, file: `${String(i + 1).padStart(2, "0")} at ${stamp(m.shot).replace(":", "-")}.jpg` });
     setProgress(0.55 + ((i + 1) / moments.length) * 0.07, `cutting out frame ${i + 1} of ${moments.length}`);
   }
   return out;
@@ -408,10 +419,22 @@ async function transcribeChunk(key, blob, offset, length) {
   if (!res.ok) throw new Error(data.error?.message || `Google returned ${res.status}`);
   const candidate = data.candidates?.[0];
   const text = candidate?.content?.parts?.map((p) => p.text).filter(Boolean).join("") || "";
+  // The model writes either "MM:SS text" or the timestamp on its own line, then the text.
   const lines = [];
+  let pending = null;
   for (const raw of text.split("\n")) {
-    const m = raw.trim().match(/^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?\s*[-–|:]?\s*(.+)$/);
-    if (m) lines.push({ t: offset + Math.min(Number(m[1]) * 60 + Number(m[2]), length), text: m[3].trim() });
+    const line = raw.trim();
+    if (!line) continue;
+    const alone = line.match(/^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?$/);
+    if (alone) { pending = Number(alone[1]) * 60 + Number(alone[2]); continue; }
+    const inline = line.match(/^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?\s*[-–|:]?\s*(.+)$/);
+    if (inline) {
+      lines.push({ t: offset + Math.min(Number(inline[1]) * 60 + Number(inline[2]), length), text: inline[3].trim() });
+      pending = null;
+    } else if (pending !== null) {
+      lines.push({ t: offset + Math.min(pending, length), text: line });
+      pending = null;
+    }
   }
   if (!lines.length) {
     // Don't let a piece go missing in silence: say why it gave nothing back.
@@ -581,12 +604,12 @@ async function process(file) {
 
     const duration = Math.floor(video.duration);
     transcript = splitLines(transcript, duration);
-    setProgress(0.95, "building the PDF…");
+    setProgress(0.95, $("output").value === "files" ? "packing it up…" : "building the PDF…");
     const spoken = transcript.map((l) => `[${stamp(l.t)}] ${l.text}`).join("\n");
     result = { name: file.name, title: cleanTitle(file.name), duration, frames, transcript, spoken, pdf: null,
                prompt: `The attached PDF is a video turned into pictures and text: "${cleanTitle(file.name)}" `
                  + `(${stamp(duration)} long). Its first page explains how to read it.\n\nMy question: ` };
-    result.pdf = await buildPdf();
+    result.pdf = $("output").value === "files" ? null : await buildPdf();
     showResult();
   } catch (err) {
     $("error").textContent = err.message;
@@ -649,52 +672,116 @@ async function buildPdf() {
     { gap: 10 });
   write("When you answer, cite the timestamps you used.", { gap: 4 });
 
+  const placed = new Set();
   for (let i = 0; i < result.frames.length; i++) {
     const frame = result.frames[i];
     const url = await blobToDataUrl(frame.blob);
     const { w, h } = await imageSize(url);
     const pageW = 842, pageH = 595, margin = 24;
-    doc.addPage([pageW, pageH], "landscape");   // explicit size: the orientation flag alone is ignored
-    const maxW = pageW - margin * 2, maxH = 430;
+    const maxW = pageW - margin * 2;
+    const said = result.transcript.filter((l) => l.t >= frame.from && l.t < frame.until);
+    // Leave room for the words: a talkative moment gets a smaller picture, never fewer lines.
+    const maxH = said.length > 8 ? 300 : 430;
     const scale = Math.min(maxW / w, maxH / h);
     const dw = w * scale, dh = h * scale;
 
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(13);
-    doc.setTextColor(30);
-    doc.text(`[${stamp(frame.shot)}]`, margin, 30);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.setTextColor(120);
-    doc.text(frame.cropped ? "close-up of the part of the screen that changed" : "full frame",
-             margin + 52, 30);
-
+    doc.addPage([pageW, pageH], "landscape");
+    const heading = (extra = "") => {
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(13);
+      doc.setTextColor(30);
+      doc.text(`[${stamp(frame.shot)}]${extra}`, margin, 30);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(120);
+      if (!extra) doc.text(frame.cropped ? "close-up of the part of the screen that changed" : "full frame", margin + 52, 30);
+    };
+    heading();
     doc.addImage(url, "JPEG", margin + (maxW - dw) / 2, 40, dw, dh);
 
-    const said = result.transcript.filter((l) => l.t >= frame.t && l.t < frame.until);
     y = 40 + dh + 20;
     if (said.length) {
-      write("Said here:", { size: 9, color: 120, gap: 3, width: maxW, x: margin });
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(120);
+      doc.text("Said here:", margin, y);
+      y += 13;
       for (const line of said) {
-        if (y > pageH - margin) break;
-        write(`[${stamp(line.t)}] ${line.text}`, { size: 10, color: 40, gap: 1, width: maxW, x: margin });
+        const text = `[${stamp(line.t)}] ${line.text}`;
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(10);
+        doc.setTextColor(40);
+        for (const part of doc.splitTextToSize(text, maxW)) {
+          if (y > pageH - margin) {                       // keep going on another page, never cut
+            doc.addPage([pageW, pageH], "landscape");
+            heading(" — continued");
+            y = 46;
+            doc.setFontSize(10);
+            doc.setTextColor(40);
+          }
+          doc.text(part, margin, y);
+          y += 13;
+        }
+        placed.add(line);
       }
     } else if (result.spoken) {
-      write("Nothing said here.", { size: 9, color: 140, gap: 0, width: maxW, x: margin });
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      doc.setTextColor(140);
+      doc.text("Nothing said between this moment and the next.", margin, y);
     }
     setProgress(0.95 + ((i + 1) / result.frames.length) * 0.05, `building the PDF — page ${i + 2}`);
+  }
+
+  // Safety net: anything the pages missed is written out rather than lost.
+  const missed = result.transcript.filter((l) => !placed.has(l));
+  if (missed.length) {
+    doc.addPage("a4", "portrait");
+    y = M;
+    write("Speech not shown on the pages above", { size: 13, style: "bold", gap: 6 });
+    for (const line of missed) write(`[${stamp(line.t)}] ${line.text}`, { size: 10, gap: 1, color: 40 });
   }
 
   return doc.output("blob");
 }
 
+function notesText() {
+  const lines = [
+    `# ${result.title}`,
+    `${stamp(result.duration)} long · ${result.frames.length} moments${result.spoken ? " · speech included" : " · no speech"}`,
+    "",
+    "Each image below is one moment from the video, named by its timestamp. Images are cropped to",
+    "the part of the screen that changed, so they are usually close-ups. Moments are chosen by how",
+    "much the picture changed, so small changes such as a line being typed can be missed: if the",
+    "speech mentions something you cannot see, it happened between two images.",
+    "",
+    "When you answer, cite the timestamps you used.",
+    "",
+  ];
+  for (const frame of result.frames) {
+    lines.push(`## [${stamp(frame.shot)}] — image ${frame.file}`);
+    const said = result.transcript.filter((l) => l.t >= frame.from && l.t < frame.until);
+    for (const line of said) lines.push(`[${stamp(line.t)}] ${line.text}`);
+    if (!said.length && result.spoken) lines.push("(nothing said until the next moment)");
+    lines.push("");
+  }
+  return lines.join("\n");
+}
+
 function files() {
+  if ($("output").value === "files") {
+    const out = result.frames.map((f) => new File([f.blob], f.file, { type: "image/jpeg" }));
+    out.unshift(new File([notesText()], `${result.title} — transcript.md`, { type: "text/markdown" }));
+    return out;
+  }
   return [new File([result.pdf], `${result.title} — FlipFrame.pdf`, { type: "application/pdf" })];
 }
 
 function showResult() {
-  $("summary").textContent = `${result.frames.length} moments from ${stamp(result.duration)} → 1 PDF, `
-    + `${result.frames.length + 1} pages, ${Math.round(result.pdf.size / 102400) / 10} MB`
+  const size = files().reduce((n, f) => n + f.size, 0);
+  $("summary").textContent = `${result.frames.length} moments from ${stamp(result.duration)} → `
+    + (result.pdf ? `1 PDF, ${result.frames.length + 1} pages, ` : `${result.frames.length} images + 1 text file, `)
+    + `${Math.round(size / 102400) / 10} MB`
     + (result.spoken ? `, speech included` : `, no speech`);
   $("prompt").textContent = result.prompt;
   $("transcript-box").hidden = !result.spoken;
@@ -718,11 +805,11 @@ function showResult() {
   const canShare = navigator.canShare && navigator.canShare({ files: files() });
   $("share").hidden = !canShare;
   $("steps").innerHTML = canShare
-    ? `<li>Tap <strong>Share the PDF</strong> and pick Claude or ChatGPT.</li>
-       <li>Ask your question in the chat. The PDF explains itself to the model.</li>`
-    : `<li>Tap <strong>Download PDF</strong>.</li>
-       <li>Attach it to a new chat in Claude or ChatGPT.</li>
-       <li>Ask your question. The PDF explains itself to the model.</li>`;
+    ? `<li>Tap <strong>Share</strong> and pick Claude or ChatGPT.</li>
+       <li>Ask your question in the chat. The file explains itself to the model.</li>`
+    : `<li>Tap <strong>Download</strong>${result.pdf ? "" : " (one text file and one image per moment)"}.</li>
+       <li>Attach ${result.pdf ? "it" : "all of them"} to a new chat in Claude or ChatGPT.</li>
+       <li>Ask your question. The file explains itself to the model.</li>`;
   $("result").hidden = false;
 }
 
@@ -737,13 +824,15 @@ $("share").addEventListener("click", async () => {
   }
 });
 
-$("download").addEventListener("click", () => {
-  const [file] = files();
-  const url = URL.createObjectURL(file);
-  const a = document.createElement("a");
-  a.href = url; a.download = file.name;
-  document.body.append(a); a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+$("download").addEventListener("click", async () => {
+  for (const file of files()) {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement("a");
+    a.href = url; a.download = file.name;
+    document.body.append(a); a.click(); a.remove();
+    await new Promise((r) => setTimeout(r, 250));
+    URL.revokeObjectURL(url);
+  }
 });
 
 $("copy").addEventListener("click", async () => {

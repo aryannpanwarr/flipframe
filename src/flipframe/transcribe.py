@@ -16,6 +16,7 @@ Output nothing else: no title, no notes, no speaker labels unless a name is spok
 If there is no speech, output nothing."""
 
 LINE = re.compile(r"^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?\s*[-–|:]?\s*(.+)$")
+ALONE = re.compile(r"^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?$")  # the model sometimes puts the time on its own line
 
 
 def _one(client, start: int, path: Path, length: int) -> list[tuple[float, str]]:
@@ -29,12 +30,20 @@ def _one(client, start: int, path: Path, length: int) -> list[tuple[float, str]]
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True),
         ),
     )
-    cues = []
-    for line in (resp.text or "").splitlines():
-        m = LINE.match(line.strip())
-        if m:
-            t = min(int(m.group(1)) * 60 + int(m.group(2)), length)
-            cues.append((float(start + t), m.group(3).strip()))
+    cues: list[tuple[float, str]] = []
+    pending: int | None = None
+    for raw in (resp.text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if alone := ALONE.match(line):
+            pending = int(alone.group(1)) * 60 + int(alone.group(2))
+        elif m := LINE.match(line):
+            cues.append((float(start + min(int(m.group(1)) * 60 + int(m.group(2)), length)), m.group(3).strip()))
+            pending = None
+        elif pending is not None:
+            cues.append((float(start + min(pending, length)), line))
+            pending = None
     return cues
 
 
