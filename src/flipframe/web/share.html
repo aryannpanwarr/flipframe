@@ -137,12 +137,6 @@
           <option value="whisper-base.en">Better (77 MB)</option>
         </select>
       </label>
-      <label>Give me
-        <select id="output">
-          <option value="pdf" selected>One PDF</option>
-          <option value="files">Images + text (sharper)</option>
-        </select>
-      </label>
       <label>Detail
         <select id="budget">
           <option value="20">Light (20 moments)</option>
@@ -290,11 +284,26 @@ function brightness(gray) {
   return total / gray.length;
 }
 
+// Some files (often MKV or AVI) report no length, or a wrong one, until you seek past the end.
+async function realDuration(video) {
+  let d = video.duration;
+  if (!Number.isFinite(d) || d <= 0) {
+    await seek(video, 1e7);
+    d = Number.isFinite(video.duration) ? video.duration : video.currentTime;
+    await seek(video, 0);
+  }
+  try {
+    if (video.seekable && video.seekable.length) d = Math.max(d, video.seekable.end(video.seekable.length - 1));
+  } catch {}
+  return Number.isFinite(d) && d > 0 ? d : 0;
+}
+
 async function pickMoments(video, budget) {
   const canvas = document.createElement("canvas");
   canvas.width = THUMB_W; canvas.height = THUMB_H;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
-  const duration = Math.floor(video.duration);
+  const duration = Math.floor(await realDuration(video));
+  if (!duration) throw new Error("Couldn't work out how long this video is. Try converting it to MP4.");
   const kept = [];
   let last = null;
 
@@ -563,7 +572,6 @@ async function process(file) {
   let video;
   try {
     video = await loadVideo(file);
-    if (!video.duration || !isFinite(video.duration)) throw new Error("Couldn't read the length of this video.");
     const moments = await pickMoments(video, Number($("budget").value));
     if (!moments.length) throw new Error("No usable frames found. Is the video all black?");
     const frames = await buildFrames(video, moments);
@@ -602,14 +610,20 @@ async function process(file) {
       }
     }
 
-    const duration = Math.floor(video.duration);
+    const duration = Math.floor(await realDuration(video));
     transcript = splitLines(transcript, duration);
-    setProgress(0.95, $("output").value === "files" ? "packing it up…" : "building the PDF…");
+    const covered = moments[moments.length - 1].t;
+    if (duration > 60 && covered < duration * 0.8) {
+      // Better to say so than to hand over a file that quietly covers a fraction of the video.
+      showError(`Heads up: moments only reach ${stamp(covered)} of ${stamp(duration)}. `
+        + `The browser may be misreading this file — converting it to MP4 usually fixes it.`);
+    }
+    setProgress(0.95, "building the PDF…");
     const spoken = transcript.map((l) => `[${stamp(l.t)}] ${l.text}`).join("\n");
     result = { name: file.name, title: cleanTitle(file.name), duration, frames, transcript, spoken, pdf: null,
                prompt: `The attached PDF is a video turned into pictures and text: "${cleanTitle(file.name)}" `
                  + `(${stamp(duration)} long). Its first page explains how to read it.\n\nMy question: ` };
-    result.pdf = $("output").value === "files" ? null : await buildPdf();
+    result.pdf = await buildPdf();
     showResult();
   } catch (err) {
     $("error").textContent = err.message;
@@ -745,43 +759,13 @@ async function buildPdf() {
   return doc.output("blob");
 }
 
-function notesText() {
-  const lines = [
-    `# ${result.title}`,
-    `${stamp(result.duration)} long · ${result.frames.length} moments${result.spoken ? " · speech included" : " · no speech"}`,
-    "",
-    "Each image below is one moment from the video, named by its timestamp. Images are cropped to",
-    "the part of the screen that changed, so they are usually close-ups. Moments are chosen by how",
-    "much the picture changed, so small changes such as a line being typed can be missed: if the",
-    "speech mentions something you cannot see, it happened between two images.",
-    "",
-    "When you answer, cite the timestamps you used.",
-    "",
-  ];
-  for (const frame of result.frames) {
-    lines.push(`## [${stamp(frame.shot)}] — image ${frame.file}`);
-    const said = result.transcript.filter((l) => l.t >= frame.from && l.t < frame.until);
-    for (const line of said) lines.push(`[${stamp(line.t)}] ${line.text}`);
-    if (!said.length && result.spoken) lines.push("(nothing said until the next moment)");
-    lines.push("");
-  }
-  return lines.join("\n");
-}
-
 function files() {
-  if ($("output").value === "files") {
-    const out = result.frames.map((f) => new File([f.blob], f.file, { type: "image/jpeg" }));
-    out.unshift(new File([notesText()], `${result.title} — transcript.md`, { type: "text/markdown" }));
-    return out;
-  }
   return [new File([result.pdf], `${result.title} — FlipFrame.pdf`, { type: "application/pdf" })];
 }
 
 function showResult() {
-  const size = files().reduce((n, f) => n + f.size, 0);
-  $("summary").textContent = `${result.frames.length} moments from ${stamp(result.duration)} → `
-    + (result.pdf ? `1 PDF, ${result.frames.length + 1} pages, ` : `${result.frames.length} images + 1 text file, `)
-    + `${Math.round(size / 102400) / 10} MB`
+  $("summary").textContent = `${result.frames.length} moments from ${stamp(result.duration)} → 1 PDF, `
+    + `${Math.round(result.pdf.size / 102400) / 10} MB`
     + (result.spoken ? `, speech included` : `, no speech`);
   $("prompt").textContent = result.prompt;
   $("transcript-box").hidden = !result.spoken;
@@ -806,10 +790,10 @@ function showResult() {
   $("share").hidden = !canShare;
   $("steps").innerHTML = canShare
     ? `<li>Tap <strong>Share</strong> and pick Claude or ChatGPT.</li>
-       <li>Ask your question in the chat. The file explains itself to the model.</li>`
-    : `<li>Tap <strong>Download</strong>${result.pdf ? "" : " (one text file and one image per moment)"}.</li>
-       <li>Attach ${result.pdf ? "it" : "all of them"} to a new chat in Claude or ChatGPT.</li>
-       <li>Ask your question. The file explains itself to the model.</li>`;
+       <li>Ask your question in the chat. The PDF explains itself to the model.</li>`
+    : `<li>Tap <strong>Download</strong>.</li>
+       <li>Attach the PDF to a new chat in Claude or ChatGPT.</li>
+       <li>Ask your question. The PDF explains itself to the model.</li>`;
   $("result").hidden = false;
 }
 
@@ -824,15 +808,13 @@ $("share").addEventListener("click", async () => {
   }
 });
 
-$("download").addEventListener("click", async () => {
-  for (const file of files()) {
-    const url = URL.createObjectURL(file);
-    const a = document.createElement("a");
-    a.href = url; a.download = file.name;
-    document.body.append(a); a.click(); a.remove();
-    await new Promise((r) => setTimeout(r, 250));
-    URL.revokeObjectURL(url);
-  }
+$("download").addEventListener("click", () => {
+  const [file] = files();
+  const url = URL.createObjectURL(file);
+  const a = document.createElement("a");
+  a.href = url; a.download = file.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 $("copy").addEventListener("click", async () => {
