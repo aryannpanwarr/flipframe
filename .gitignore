@@ -9,3 +9,4 @@ cache/
 test-videos/
 src/flipframe/web/models/
 src/flipframe/web/local/
+public/
