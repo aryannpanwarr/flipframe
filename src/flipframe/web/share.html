@@ -145,6 +145,7 @@
         </select>
       </label>
     </div>
+    <button class="link-btn" id="key-toggle" type="button" style="margin-top:12px" hidden>Add a Google key as a backup</button>
     <div class="key-row" id="key-row">
       <input id="key" type="password" placeholder="Google Gemini API key (for transcribing speech)" autocomplete="off">
       <div class="options">
@@ -723,10 +724,20 @@ function saveKey() {
 function syncEngine() {
   const google = $("engine").value === "google";
   $("quality-row").hidden = google;
+  // On-device needs no key, so keep it out of the way unless asked for or already saved.
+  const wanted = google || $("key").value.trim() || $("key-toggle").dataset.open === "1";
+  $("key-row").hidden = !wanted;
+  $("key-toggle").hidden = wanted;
   $("key-hint").textContent = google
     ? "The key never leaves this device except to Google. It is forgotten when you close the tab unless you tick the box."
-    : "Optional: a key is only used as a backup if speech on this device fails.";
+    : "Used only if speech on this device fails. The key never leaves this device except to Google.";
 }
+
+$("key-toggle").addEventListener("click", () => {
+  $("key-toggle").dataset.open = "1";
+  syncEngine();
+  $("key").focus();
+});
 $("engine").addEventListener("change", syncEngine);
 syncEngine();
 
