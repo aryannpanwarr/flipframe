@@ -1,30 +1,72 @@
 # FlipFrame
 
-Give a model the ability to watch a video file.
+Let an AI chat watch your video.
 
-FlipFrame turns a local video into a timestamped timeline of what was **said** (transcribed
-from the audio) and what was **shown** (notes on the frames that changed), and lets a model
-look at the actual frames when it needs detail. You supply the video; FlipFrame never
-downloads anything.
+Claude and ChatGPT read text and look at pictures, but they can't watch video. FlipFrame turns a
+video into the handful of frames that actually carry information, plus a transcript, and gives you
+**one PDF to drop into the chat**.
+
+There are two ways to use it:
+
+| | Runs where | Good for |
+|---|---|---|
+| **Browser tool** | Entirely in the browser; the video is never uploaded | Any chat app, including on a phone |
+| **MCP server + CLI** | On your machine | Claude Desktop and Claude Code, where the model calls it directly |
 
 ## Setup
 
 ```bash
 uv sync
-echo 'GEMINI_API_KEY=your-key' > .env
+./scripts/fetch-models.sh        # Whisper models for in-browser speech (~117 MB, not in git)
+uv run flipframe serve           # http://127.0.0.1:8765
 ```
 
-Needs `ffmpeg` on your PATH.
+Needs `ffmpeg` on your PATH. For the MCP server and the CLI, put `GEMINI_API_KEY=...` in `.env`.
 
-## Use it as an MCP tool
+Pages:
 
-Add it to Claude Code (drop `--scope user` to enable it for one project only):
+| Address | Page |
+|---|---|
+| `/` | Landing page |
+| `/app` (or `/share`) | **The browser tool** |
+| `/local` | Local pipeline: upload a video, play it, read its timeline |
+
+## The browser tool
+
+Pick a video, and the page:
+
+1. **Finds the moments that change.** Every second is shrunk to a 160×90 thumbnail and compared with
+   the last kept one. A frame is kept when enough of the picture changed, and never closer than 3 s
+   apart unless the shot really cuts, so a talking face doesn't use up the budget.
+2. **Crops each moment** to the part of the screen that changed, and grabs it a beat later so typing
+   has finished.
+3. **Writes down the speech**, either with Whisper running on your device (bundled, nothing leaves
+   the machine) or through Google with your own key. Whichever you pick, the other is used
+   automatically if it fails.
+4. **Builds one PDF**: a first page explaining how to read it, then one page per moment — the
+   close-up, then what was said until the next moment.
+
+Then **Share** (straight into the Claude or ChatGPT app on a phone) or **Download**.
+
+A 10-minute tutorial takes about 30 s for frames plus 15 s for speech through Google, and comes to
+roughly 40 pages and 2 MB.
+
+### Privacy
+
+- The video never leaves your device. Frames, cropping and the PDF are all made in the page.
+- Speech on device uses the bundled Whisper model and no network at all.
+- Choosing Google sends only the audio, as small MP3 pieces, straight from your browser to Google.
+- Your API key is kept for the tab only, unless you tick "Remember the key on this device".
+
+## MCP server
+
+Add it to Claude Code (drop `--scope user` for this project only):
 
 ```bash
 claude mcp add flipframe --scope user -- uv --directory /absolute/path/to/flipframe run flipframe mcp
 ```
 
-Other MCP clients, e.g. Claude Desktop's `claude_desktop_config.json`:
+Claude Desktop's `claude_desktop_config.json`:
 
 ```json
 {
@@ -37,45 +79,21 @@ Other MCP clients, e.g. Claude Desktop's `claude_desktop_config.json`:
 }
 ```
 
-Tools:
-
 | Tool | What it does |
 |---|---|
-| `watch_video(path, coding?, force?)` | Process a video file (or load it from cache) and return the timeline |
-| `get_frames(video, timestamps)` | Return the actual picture at up to 6 moments, e.g. `["4:12", "7:30"]` |
-| `get_timeline(video, start?, end?, kinds?)` | Read part of a long timeline, e.g. only `TEXT` between `10:00` and `20:00` |
+| `watch_video(path, coding?, force?)` | Process a video file (or load it from cache) and return its timeline |
+| `get_frames(video, timestamps)` | Return the picture at up to 6 moments, e.g. `["4:12", "7:30"]` |
+| `get_timeline(video, start?, end?, kinds?)` | Read part of a long timeline |
 | `list_videos()` | Videos already watched |
 
-Set `coding: true` for videos with code or small text.
-
-## Share page (no server, nothing uploaded)
-
-`http://127.0.0.1:8765/share` does the whole job in the browser: it picks the frames, transcribes
-the speech, and hands you **one PDF** to share into Claude or ChatGPT. The video never leaves the
-device. Speech runs on-device with Whisper (bundled), or through Google with your own key as a
-backup. Fetch the models once:
-
-```bash
-./scripts/fetch-models.sh     # ~117 MB, not kept in git
-```
-
-The PDF holds the transcript as real text plus one contact-sheet page per set of frames, and its
-first page tells the model how to read it.
-
-## Web page
-
-```bash
-uv run flipframe serve        # opens http://127.0.0.1:8765
-```
-
-Drop a video file in. You get a player, the kept frames, the timeline, and a chat about the
-video. Click any timestamp to play from there.
+The MCP server runs on your machine, so it needs the video's path. Phone and web chat apps can only
+reach servers on the internet — use the browser tool there.
 
 ## Command line
 
 ```bash
-uv run flipframe watch path/to/video.mp4            # prints the path to timeline.md
-uv run flipframe watch talk.mp4 --grid 2            # code or small text on screen
+uv run flipframe watch path/to/video.mp4      # prints the path to timeline.md
+uv run flipframe watch talk.mp4 --grid 2      # code or small text on screen
 ```
 
 | Flag | Default | Meaning |
@@ -89,22 +107,13 @@ uv run flipframe watch talk.mp4 --grid 2            # code or small text on scre
 | `--no-describe` | off | skip frame notes |
 | `--force` | off | reprocess even if cached |
 
-## How it works
-
-1. **Speech**: ffmpeg pulls the audio out, splits it into 5-minute pieces, and Gemini
-   (`gemini-3.5-flash-lite`) transcribes them in parallel with timestamps
-2. **Frames** (at the same time): every second is shrunk to a 160×90 thumbnail; a frame is kept
-   when enough of it changed since the last kept one, when the speaker points at the screen
-   ("as you can see…"), or when nothing was kept for 20 s. Frames are never kept closer than 3 s
-   apart unless the picture changes a lot, so a talking face doesn't fill the budget
-3. **Contact sheets**: kept frames are tiled 3×3 (or 2×2) with timestamps burned in
-4. **Frame notes**: Gemini describes each sheet, skipping what the speech already says
-5. **Timeline**: speech and notes merged into `timeline.json` and `timeline.md`
+The CLI and MCP path still produce contact sheets and a timeline; the crop-and-interleave layout
+lives in the browser tool for now.
 
 ## Cache
 
-Everything lives in `~/.cache/flipframe/<id>/` (change with `FLIPFRAME_CACHE`). The id comes
-from the file's contents, so the same file is only processed once wherever it's stored.
+Everything is kept in `~/.cache/flipframe/<id>/` (change with `FLIPFRAME_CACHE`). The id comes from
+the file's contents, so the same video is only processed once wherever it is stored.
 
 ```
 <id>/
@@ -116,5 +125,34 @@ from the file's contents, so the same file is only processed once wherever it's 
   timeline.md
 ```
 
-The original video is not copied; FlipFrame reads it from where it is. Web uploads are stored
-in `~/.cache/flipframe/uploads/`.
+The original video is never copied; FlipFrame reads it where it is. Videos uploaded through `/local`
+are stored in `~/.cache/flipframe/uploads/`.
+
+## Known limits
+
+- **Motion is lost.** Sport, dance and physical demos come out as stills; you learn where something
+  happened, not how it moved.
+- **Small on-screen text can still be hard to read.** Cropping helps a lot; reading the text out with
+  OCR would help more and isn't built yet.
+- **Long videos in the browser.** Audio is decoded in one piece, so very long videos can run out of
+  memory on a phone. Whisper on a phone is also slow — use Google there.
+- **Gaps between moments.** Small changes such as a line being typed can fall between frames. The
+  PDF says so on its first page.
+
+## Layout
+
+```
+src/flipframe/
+  __init__.py      pipeline + CLI
+  source.py        read a video file, pull out audio
+  transcribe.py    audio -> timestamped text (Gemini)
+  frames.py        pick and cut the frames that matter
+  sheets.py        contact sheets
+  describe.py      frame notes (Gemini or Claude)
+  timeline.py      merge speech and notes
+  server.py        local web server
+  mcp_server.py    MCP tools
+  web/             landing page, browser tool, local page, Whisper worker
+scripts/
+  fetch-models.sh  download the Whisper models
+```
