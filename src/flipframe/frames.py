@@ -9,6 +9,7 @@ from PIL import Image
 
 THUMB_W, THUMB_H = 160, 90
 PIXEL_CHANGED = 24  # a pixel counts as changed if its brightness moved this much (0-255)
+BIG_CHANGE = 15.0   # percent changed that means a real scene cut, not someone talking
 
 # Speech that points at the screen: the payload is in the picture, not the words.
 POINTING = re.compile(
@@ -30,13 +31,15 @@ def thumbnails(video: Path) -> np.ndarray:
 
 
 def select(thumbs: np.ndarray, cues: list[tuple[float, str]],
-           budget: int, threshold: float, max_gap: int) -> list[int]:
+           budget: int, threshold: float, max_gap: int, min_gap: int = 3) -> list[int]:
     """Pick the seconds worth looking at.
 
     A frame is kept when enough of it differs from the last *kept* frame (so
     slow changes like typing still add up), when the speaker points at the
     screen, or when nothing has been kept for max_gap seconds. threshold is the
     percent of pixels that must have changed: typing one line of code is ~0.5%.
+    A talking face changes a little every second, so frames are never kept closer
+    together than min_gap unless the picture changed enough to be a real cut.
     """
     pointing = {int(t) for t, text in cues if POINTING.search(text)}
     kept: list[int] = []
@@ -46,7 +49,8 @@ def select(thumbs: np.ndarray, cues: list[tuple[float, str]],
             continue
         changed = 100.0 if last is None else float((np.abs(thumb - last) > PIXEL_CHANGED).mean() * 100)
         gap = t - kept[-1] if kept else max_gap
-        if changed > threshold or gap >= max_gap or (t in pointing and gap >= 2):
+        if ((changed > threshold and gap >= min_gap) or changed > BIG_CHANGE
+                or gap >= max_gap or (t in pointing and gap >= min_gap)):
             kept.append(t)
             last = thumb
 

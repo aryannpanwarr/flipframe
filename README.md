@@ -48,6 +48,20 @@ Tools:
 
 Set `coding: true` for videos with code or small text.
 
+## Share page (no server, nothing uploaded)
+
+`http://127.0.0.1:8765/share` does the whole job in the browser: it picks the frames, transcribes
+the speech, and hands you **one PDF** to share into Claude or ChatGPT. The video never leaves the
+device. Speech runs on-device with Whisper (bundled), or through Google with your own key as a
+backup. Fetch the models once:
+
+```bash
+./scripts/fetch-models.sh     # ~117 MB, not kept in git
+```
+
+The PDF holds the transcript as real text plus one contact-sheet page per set of frames, and its
+first page tells the model how to read it.
+
 ## Web page
 
 ```bash
@@ -69,6 +83,7 @@ uv run flipframe watch talk.mp4 --grid 2            # code or small text on scre
 | `--budget` | 90 | max frames to keep |
 | `--threshold` | 0.5 | percent of the picture that must change since the last kept frame |
 | `--max-gap` | 20 | always keep a frame at least every N seconds |
+| `--min-gap` | 3 | never keep frames closer than this, unless the shot cuts |
 | `--grid` | 3 | frames per contact-sheet side; 2 shows each frame bigger |
 | `--provider` | `gemini` | who writes the frame notes: `gemini` or `claude` |
 | `--no-describe` | off | skip frame notes |
@@ -80,7 +95,8 @@ uv run flipframe watch talk.mp4 --grid 2            # code or small text on scre
    (`gemini-3.5-flash-lite`) transcribes them in parallel with timestamps
 2. **Frames** (at the same time): every second is shrunk to a 160×90 thumbnail; a frame is kept
    when enough of it changed since the last kept one, when the speaker points at the screen
-   ("as you can see…"), or when nothing was kept for 20 s
+   ("as you can see…"), or when nothing was kept for 20 s. Frames are never kept closer than 3 s
+   apart unless the picture changes a lot, so a talking face doesn't fill the budget
 3. **Contact sheets**: kept frames are tiled 3×3 (or 2×2) with timestamps burned in
 4. **Frame notes**: Gemini describes each sheet, skipping what the speech already says
 5. **Timeline**: speech and notes merged into `timeline.json` and `timeline.md`

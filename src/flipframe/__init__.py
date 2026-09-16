@@ -34,7 +34,7 @@ def load(video_id: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
 
 
-def run(path: str | Path, *, budget: int = 90, threshold: float = 0.5, max_gap: int = 20,
+def run(path: str | Path, *, budget: int = 90, threshold: float = 0.5, max_gap: int = 20, min_gap: int = 3,
         grid: int = 3, provider: str = "gemini", model: str | None = None,
         describe_frames: bool = True, force: bool = False,
         log: Callable[[str], None] = print) -> Path:
@@ -72,7 +72,7 @@ def run(path: str | Path, *, budget: int = 90, threshold: float = 0.5, max_gap: 
         thumbs = frames.thumbnails(video)
         cues = pending.result()
 
-    chosen = frames.select(thumbs, cues, budget, threshold, max_gap)
+    chosen = frames.select(thumbs, cues, budget, threshold, max_gap, min_gap)
     log(f"kept {len(chosen)} of {len(thumbs)} seconds")
     frame_paths = frames.extract(video, chosen, workdir / "frames")
     sheet_list = sheets.build(frame_paths, workdir / "sheets", grid)
@@ -98,7 +98,7 @@ def run(path: str | Path, *, budget: int = 90, threshold: float = 0.5, max_gap: 
 def watch(args: argparse.Namespace) -> None:
     started = time.time()
     workdir = run(
-        args.file, budget=args.budget, threshold=args.threshold, max_gap=args.max_gap,
+        args.file, budget=args.budget, threshold=args.threshold, max_gap=args.max_gap, min_gap=args.min_gap,
         grid=args.grid, provider=args.provider, model=args.model,
         describe_frames=not args.no_describe, force=args.force,
         log=lambda msg: print(f"[{time.time() - started:5.1f}s] {msg}", file=sys.stderr),
@@ -129,6 +129,8 @@ def main() -> None:
                    help="percent of the picture that must change to keep a frame (default 0.5)")
     w.add_argument("--max-gap", type=int, default=20,
                    help="always keep a frame at least this often, seconds (default 20)")
+    w.add_argument("--min-gap", type=int, default=3,
+                   help="never keep frames closer than this, unless the shot cuts (default 3 s)")
     w.add_argument("--grid", type=int, default=3, choices=[1, 2, 3, 4],
                    help="frames per sheet side; 2 shows small text bigger (default 3)")
     w.add_argument("--provider", choices=describe.PROVIDERS, default="gemini",

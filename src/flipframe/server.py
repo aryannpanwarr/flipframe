@@ -28,6 +28,7 @@ FRAME = re.compile(r"^\d{5}\.jpg$")
 
 app = FastAPI()
 app.mount("/vendor", StaticFiles(directory=WEB / "vendor"), name="vendor")
+app.mount("/models", StaticFiles(directory=WEB / "models"), name="models")
 jobs: dict[str, dict] = {}
 
 

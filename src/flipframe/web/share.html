@@ -125,6 +125,18 @@
     <div class="options" style="margin-top:12px">
       <label><input id="coding" type="checkbox"> Code or small text on screen</label>
       <label><input id="speech" type="checkbox" checked> Transcribe the speech</label>
+      <label>using
+        <select id="engine">
+          <option value="device" selected>Whisper on this device</option>
+          <option value="google">Google (needs a key)</option>
+        </select>
+      </label>
+      <label id="quality-row">Quality
+        <select id="quality">
+          <option value="whisper-tiny.en" selected>Fast (42 MB)</option>
+          <option value="whisper-base.en">Better (77 MB)</option>
+        </select>
+      </label>
       <label>Detail
         <select id="budget">
           <option value="45">Light (45 frames)</option>
@@ -139,7 +151,7 @@
         <label><input id="remember" type="checkbox"> Remember the key on this device</label>
         <button class="link-btn" id="forget" type="button" hidden>Forget it</button>
       </div>
-      <p class="hint">The key never leaves this device except to Google. It is forgotten when you close
+      <p class="hint" id="key-hint">The key never leaves this device except to Google. It is forgotten when you close
         the tab unless you tick the box. Get one free at
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
         Without a key you still get the pictures, just no speech.</p>
@@ -250,7 +262,8 @@ async function pickFrames(video, budget) {
     if (brightness(gray) < 8) continue;                       // black frame or fade
     const changed = last ? percentChanged(gray, last) : 100;
     const gap = kept.length ? t - kept[kept.length - 1] : MAX_GAP;
-    if (changed > CHANGED_PERCENT || gap >= MAX_GAP) {
+    // A talking face changes a little every second; only a real cut beats the minimum gap.
+    if ((changed > CHANGED_PERCENT && gap >= MIN_GAP) || changed > BIG_CHANGE || gap >= MAX_GAP) {
       kept.push(t);
       last = gray;
     }
@@ -307,6 +320,9 @@ async function buildSheets(video, seconds, grid) {
   return sheets;
 }
 
+// Both models ship with this page; the bigger one is better with numbers and names.
+const MIN_GAP = 3;                     // never keep frames closer together than this (seconds)
+const BIG_CHANGE = 15;                 // unless this much of the picture changed: a real cut
 const AUDIO_RATE = 16000;         // what speech models expect
 const CHUNK_SECONDS = 300;        // 5-minute pieces, transcribed in parallel
 const AT_ONCE = 3;                // parallel requests, gentle on rate limits
@@ -382,9 +398,38 @@ async function transcribeChunk(key, blob, offset, length) {
   return lines;
 }
 
-async function transcribe(file, key) {
-  setProgress(0.62, "reading the audio…");
-  const samples = await readAudio(file);
+let whisper = null, whisperName = null;   // kept between runs so a model loads only once
+
+// Speech to text without sending anything anywhere. First run downloads the model (~60 MB).
+async function transcribeOnDevice(samples) {
+  const name = $("quality").value;
+  if (!whisper || whisperName !== name) {
+    setProgress(0.66, "loading the speech model (first time only)…");
+    const { pipeline, env } = await import("./vendor/transformers.min.js");
+    env.allowLocalModels = true;                         // the model ships with this page
+    env.allowRemoteModels = false;                       // never fetch from the internet
+    env.localModelPath = new URL("models/", location.href).href;
+    env.backends.onnx.wasm.wasmPaths = new URL("vendor/ort/", location.href).href;
+    whisper = await pipeline("automatic-speech-recognition", name, {
+      dtype: "q8",
+      progress_callback: (p) => {
+        if (p.status === "progress" && p.total) {
+          setProgress(0.66 + (p.loaded / p.total) * 0.1, `loading the speech model — ${Math.round((p.loaded / p.total) * 100)}%`);
+        }
+      },
+    });
+    whisperName = name;
+  }
+
+  setProgress(0.78, "listening to the audio…");
+  const output = await whisper(samples, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true });
+  const lines = (output.chunks || [])
+    .filter((c) => c.text && c.text.trim())
+    .map((c) => ({ t: Math.max(0, Math.round(c.timestamp?.[0] ?? 0)), text: c.text.trim() }));
+  return dropRepeats(lines);
+}
+
+async function transcribeWithGoogle(samples, key) {
   const perChunk = CHUNK_SECONDS * AUDIO_RATE;
   const chunks = [];
   for (let i = 0; i < samples.length; i += perChunk) {
@@ -403,6 +448,31 @@ async function transcribe(file, key) {
     setProgress(0.8 + (done / chunks.length) * 0.2, `transcribing ${done} of ${chunks.length} piece(s)…`);
   }
   return lines.sort((a, b) => a.t - b.t);
+}
+
+// Overlapping windows repeat the same words; keep the first copy only.
+function dropRepeats(lines) {
+  const out = [];
+  for (const line of lines) {
+    const plain = line.text.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim();
+    const previous = out.length ? out[out.length - 1].text.toLowerCase().replace(/[^a-z0-9 ]/g, "").trim() : "";
+    if (plain && previous && (plain === previous || previous.endsWith(plain) || plain.startsWith(previous))) {
+      if (plain.length > previous.length) out[out.length - 1] = line;   // keep the fuller version
+      continue;
+    }
+    out.push(line);
+  }
+  return out;
+}
+
+function requireKey(key) {
+  if (!key) throw new Error("no Google API key entered");
+  return key;
+}
+
+function showError(text) {
+  $("error").textContent = text;
+  $("error").hidden = false;
 }
 
 function promptFor(name, duration, sheets, grid) {
@@ -436,13 +506,36 @@ async function process(file) {
     const sheets = await buildSheets(video, seconds, grid);
 
     let transcript = [];
-    const key = $("key").value.trim();
-    if ($("speech").checked && key) {
+    if ($("speech").checked) {
+      const key = $("key").value.trim();
+      const wanted = $("engine").value;
+      setProgress(0.62, "reading the audio…");
+      let samples = null;
       try {
-        transcript = await transcribe(file, key);
+        samples = await readAudio(file);
       } catch (err) {
-        $("error").textContent = `Pictures are ready, but the speech failed: ${err.message}`;
-        $("error").hidden = false;
+        showError(`Pictures are ready, but the audio couldn't be read: ${err.message}`);
+      }
+
+      if (samples) {
+        try {
+          transcript = wanted === "device"
+            ? await transcribeOnDevice(samples)
+            : await transcribeWithGoogle(samples, requireKey(key));
+        } catch (err) {
+          // Whichever way failed, offer the other one rather than giving up.
+          const other = wanted === "device" ? "google" : "device";
+          try {
+            if (other === "google" && !key) throw new Error("add a Google key to use it as a backup");
+            setProgress(0.7, other === "google" ? "device failed — trying Google…" : "Google failed — trying this device…");
+            transcript = other === "device"
+              ? await transcribeOnDevice(samples)
+              : await transcribeWithGoogle(samples, key);
+            showError(`Speech on ${wanted === "device" ? "this device" : "Google"} failed (${err.message}), so the backup was used.`);
+          } catch (second) {
+            showError(`Pictures are ready, but the speech failed: ${err.message}. Backup also failed: ${second.message}`);
+          }
+        }
       }
     }
 
@@ -626,6 +719,16 @@ function saveKey() {
     $("forget").hidden = !value;
   } catch {}
 }
+
+function syncEngine() {
+  const google = $("engine").value === "google";
+  $("quality-row").hidden = google;
+  $("key-hint").textContent = google
+    ? "The key never leaves this device except to Google. It is forgotten when you close the tab unless you tick the box."
+    : "Optional: a key is only used as a backup if speech on this device fails.";
+}
+$("engine").addEventListener("change", syncEngine);
+syncEngine();
 
 $("key").addEventListener("change", saveKey);
 $("remember").addEventListener("change", saveKey);
