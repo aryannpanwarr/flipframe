@@ -399,35 +399,42 @@ async function transcribeChunk(key, blob, offset, length) {
   return lines;
 }
 
-let whisper = null, whisperName = null;   // kept between runs so a model loads only once
+let worker = null, jobId = 0;
 
-// Speech to text without sending anything anywhere. First run downloads the model (~60 MB).
-async function transcribeOnDevice(samples) {
-  const name = $("quality").value;
-  if (!whisper || whisperName !== name) {
-    setProgress(0.66, "loading the speech model (first time only)…");
-    const { pipeline, env } = await import("./vendor/transformers.min.js");
-    env.allowLocalModels = true;                         // the model ships with this page
-    env.allowRemoteModels = false;                       // never fetch from the internet
-    env.localModelPath = new URL("models/", location.href).href;
-    env.backends.onnx.wasm.wasmPaths = new URL("vendor/ort/", location.href).href;
-    whisper = await pipeline("automatic-speech-recognition", name, {
-      dtype: "q8",
-      progress_callback: (p) => {
+function speechWorker() {
+  if (!worker) worker = new Worker(new URL("worker.js", location.href), { type: "module" });
+  return worker;
+}
+
+// Speech to text without sending anything anywhere. First run loads the model (~40-80 MB).
+function transcribeOnDevice(samples) {
+  const model = $("quality").value;
+  const id = ++jobId;
+  const w = speechWorker();
+
+  return new Promise((resolve, reject) => {
+    const onMessage = ({ data }) => {
+      if (data.id !== id) return;
+      if (data.progress) {
+        const p = data.progress;
         if (p.status === "progress" && p.total) {
-          setProgress(0.66 + (p.loaded / p.total) * 0.1, `loading the speech model — ${Math.round((p.loaded / p.total) * 100)}%`);
+          setProgress(0.66 + (p.loaded / p.total) * 0.12, `loading the speech model — ${Math.round((p.loaded / p.total) * 100)}%`);
         }
-      },
-    });
-    whisperName = name;
-  }
-
-  setProgress(0.78, "listening to the audio…");
-  const output = await whisper(samples, { chunk_length_s: 30, stride_length_s: 5, return_timestamps: true });
-  const lines = (output.chunks || [])
-    .filter((c) => c.text && c.text.trim())
-    .map((c) => ({ t: Math.max(0, Math.round(c.timestamp?.[0] ?? 0)), text: c.text.trim() }));
-  return dropRepeats(lines);
+        return;
+      }
+      if (data.stage === "listening") { setProgress(0.78, "listening to the audio…"); return; }
+      w.removeEventListener("message", onMessage);
+      if (data.error) { reject(new Error(data.error)); return; }
+      const lines = data.chunks
+        .filter((c) => c.text && c.text.trim())
+        .map((c) => ({ t: Math.max(0, Math.round(c.timestamp?.[0] ?? 0)), text: c.text.trim() }));
+      resolve(dropRepeats(lines));
+    };
+    w.addEventListener("message", onMessage);
+    w.onerror = (e) => { w.removeEventListener("message", onMessage); reject(new Error(e.message || "the speech worker failed")); };
+    setProgress(0.66, "starting the speech model…");
+    w.postMessage({ id, model, samples });   // copied, not moved: Google backup may still need it
+  });
 }
 
 async function transcribeWithGoogle(samples, key) {

@@ -76,10 +76,19 @@ def index() -> str:
     return PAGE.read_text(encoding="utf-8")
 
 
+# Letting the speech model use several threads needs these two headers on every file it touches.
+ISOLATION = {"Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp"}
+
+
 @app.get("/share", response_class=HTMLResponse)
-def share_page() -> str:
+def share_page() -> HTMLResponse:
     """Browser-only page: picks frames on this device, nothing is uploaded."""
-    return (WEB / "share.html").read_text(encoding="utf-8")
+    return HTMLResponse((WEB / "share.html").read_text(encoding="utf-8"), headers=ISOLATION)
+
+
+@app.get("/worker.js")
+def worker() -> FileResponse:
+    return FileResponse(WEB / "worker.js", media_type="text/javascript", headers=ISOLATION)
 
 
 @app.post("/api/upload")
