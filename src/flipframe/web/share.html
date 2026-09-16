@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FlipFrame — share a video with Claude or ChatGPT</title>
 <script src="vendor/lame.min.js"></script>
+<script src="vendor/jspdf.umd.min.js"></script>
 <style>
   :root {
     --ground: #f5f5f3;
@@ -148,8 +149,8 @@
   <section id="result" hidden>
     <p class="label" id="summary"></p>
     <div class="actions">
-      <button class="primary" id="share" hidden type="button">Share to an app</button>
-      <button class="secondary" id="download" type="button">Download sheets</button>
+      <button class="primary" id="share" hidden type="button">Share the PDF</button>
+      <button class="secondary" id="download" type="button">Download PDF</button>
       <button class="secondary" id="copy" type="button">Copy prompt</button>
     </div>
     <ol class="steps" id="steps" style="margin-top:12px"></ol>
@@ -158,7 +159,7 @@
       <pre class="transcript" id="transcript"></pre>
     </div>
     <div style="margin-top:20px">
-      <p class="label">Prompt to send with the pictures</p>
+      <p class="label">Prompt to send with the PDF</p>
       <pre class="prompt" id="prompt"></pre>
     </div>
     <div style="margin-top:20px">
@@ -439,10 +440,12 @@ async function process(file) {
     }
 
     const duration = Math.floor(video.duration);
+    setProgress(0.98, "building the PDF…");
     const spoken = transcript.map((l) => `[${stamp(l.t)}] ${l.text}`).join("\n");
-    result = { name: file.name, duration, sheets, grid, transcript, spoken,
-               prompt: promptFor(file.name, duration, sheets, grid)
-                 + (spoken ? `\n\nWhat is said in the video:\n${spoken}\n\nMy question: ` : "") };
+    result = { name: file.name, duration, sheets, grid, transcript, spoken, pdf: null,
+               prompt: `The attached PDF is a video turned into pictures and text: "${file.name}" (${stamp(duration)} long). `
+                 + `Its first page explains how to read it.\n\nMy question: ` };
+    result.pdf = await buildPdf();
     showResult();
   } catch (err) {
     $("error").textContent = err.message;
@@ -455,19 +458,86 @@ async function process(file) {
   }
 }
 
+function blobToDataUrl(blob) {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.readAsDataURL(blob);
+  });
+}
+
+function imageSize(dataUrl) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve({ w: img.naturalWidth, h: img.naturalHeight });
+    img.src = dataUrl;
+  });
+}
+
+// One file holding everything: instructions, transcript as real text, then the sheets.
+async function buildPdf() {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({ unit: "pt", format: "a4" });
+  const M = 48, W = 595 - M * 2;
+  let y = M;
+
+  const write = (text, { size = 11, style = "normal", gap = 6, color = 30 } = {}) => {
+    doc.setFont("helvetica", style);
+    doc.setFontSize(size);
+    doc.setTextColor(color);
+    for (const line of doc.splitTextToSize(text, W)) {
+      if (y > 842 - M) { doc.addPage("a4", "portrait"); y = M; }
+      doc.text(line, M, y);
+      y += size * 1.35;
+    }
+    y += gap;
+  };
+
+  const total = result.sheets.reduce((n, sh) => n + sh.seconds.length, 0);
+  write(result.name, { size: 18, style: "bold", gap: 4 });
+  write(`${stamp(result.duration)} long · ${total} frames · ${result.sheets.length} contact sheet(s)`
+        + (result.spoken ? " · transcript included" : " · no transcript"), { size: 10, color: 110, gap: 16 });
+
+  write("How to read this file", { size: 13, style: "bold", gap: 4 });
+  write(`This is a video turned into pictures and text. After this page, each page is a contact sheet holding up to `
+    + `${result.grid * result.grid} frames from the video, in order, left to right and top to bottom. The yellow label on `
+    + `each frame is its timestamp. Frames were kept only where the picture changed, so gaps mean nothing moved. `
+    + (result.spoken ? "The transcript below is what was said, with timestamps. " : "There is no audio here, so work from what is on screen. ")
+    + "When you answer, cite the timestamps you used.", { gap: 14 });
+
+  if (result.spoken) {
+    write("Transcript", { size: 13, style: "bold", gap: 4 });
+    for (const line of result.transcript) write(`[${stamp(line.t)}] ${line.text}`, { size: 10, gap: 0, color: 60 });
+  }
+
+  for (const sheet of result.sheets) {
+    const url = await blobToDataUrl(sheet.blob);
+    const { w, h } = await imageSize(url);
+    const caption = 44;
+    doc.addPage([w, h + caption], w > h ? "landscape" : "portrait");
+    doc.setFillColor(255, 255, 255);
+    doc.rect(0, 0, w, h + caption, "F");
+    doc.addImage(url, "JPEG", 0, 0, w, h);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(18);
+    doc.setTextColor(60);
+    doc.text(`Sheet ${sheet.index} of ${result.sheets.length} — ${sheet.seconds.map(stamp).join("  ")}`,
+             16, h + 28, { maxWidth: w - 32 });
+  }
+
+  return doc.output("blob");
+}
+
 function files() {
   const base = result.name.replace(/\.[^.]+$/, "");
-  const out = result.sheets.map((s) => new File([s.blob], `${base} sheet ${s.index}.jpg`, { type: "image/jpeg" }));
-  if (result.spoken) {
-    out.push(new File([`${result.name}\n\n${result.spoken}\n`], `${base} transcript.txt`, { type: "text/plain" }));
-  }
-  return out;
+  return [new File([result.pdf], `${base} — FlipFrame.pdf`, { type: "application/pdf" })];
 }
 
 function showResult() {
   const total = result.sheets.reduce((n, s) => n + s.seconds.length, 0);
-  $("summary").textContent = `${total} frames from ${stamp(result.duration)} → ${result.sheets.length} image${result.sheets.length > 1 ? "s" : ""}`
-    + (result.spoken ? ` + transcript` : "");
+  $("summary").textContent = `${total} frames from ${stamp(result.duration)} → 1 PDF, `
+    + `${result.sheets.length + 1} pages, ${Math.round(result.pdf.size / 102400) / 10} MB`
+    + (result.spoken ? `, transcript included` : `, no transcript`);
   $("prompt").textContent = result.prompt;
   $("transcript-box").hidden = !result.spoken;
   if (result.spoken) {
@@ -490,11 +560,11 @@ function showResult() {
   const canShare = navigator.canShare && navigator.canShare({ files: files() });
   $("share").hidden = !canShare;
   $("steps").innerHTML = canShare
-    ? `<li>Tap <strong>Share to an app</strong> and pick Claude or ChatGPT.</li>
-       <li>Tap <strong>Copy prompt</strong>, paste it with the pictures, and add your question.</li>`
-    : `<li>Tap <strong>Download sheets</strong> to save the images.</li>
-       <li>Attach them to a new chat in Claude or ChatGPT.</li>
-       <li>Tap <strong>Copy prompt</strong>, paste it, and add your question.</li>`;
+    ? `<li>Tap <strong>Share the PDF</strong> and pick Claude or ChatGPT.</li>
+       <li>Ask your question in the chat. The PDF explains itself to the model.</li>`
+    : `<li>Tap <strong>Download PDF</strong>.</li>
+       <li>Attach it to a new chat in Claude or ChatGPT.</li>
+       <li>Ask your question. The PDF explains itself to the model.</li>`;
   $("result").hidden = false;
 }
 
@@ -509,15 +579,13 @@ $("share").addEventListener("click", async () => {
   }
 });
 
-$("download").addEventListener("click", async () => {
-  for (const file of files()) {
-    const url = URL.createObjectURL(file);
-    const a = document.createElement("a");
-    a.href = url; a.download = file.name;
-    document.body.append(a); a.click(); a.remove();
-    await new Promise((r) => setTimeout(r, 300));
-    URL.revokeObjectURL(url);
-  }
+$("download").addEventListener("click", () => {
+  const [file] = files();
+  const url = URL.createObjectURL(file);
+  const a = document.createElement("a");
+  a.href = url; a.download = file.name;
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
 
 $("copy").addEventListener("click", async () => {
@@ -540,7 +608,8 @@ $("drop").addEventListener("drop", (e) => {
   if (!$("file").disabled && e.dataTransfer.files[0]) process(e.dataTransfer.files[0]);
 });
 
-window.flipframeProcess = process;  // used by the automated test
+window.flipframeProcess = process;      // used by the automated test
+window.flipframeResult = () => result;  // used by the automated test
 </script>
 </body>
 </html>
