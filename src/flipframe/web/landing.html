@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FlipFrame — let an AI chat watch your video</title>
+<meta name="description" content="Turn a video into sharp pictures and a transcript, in one PDF you can hand to Claude or ChatGPT. Runs in your browser; the video never leaves your device.">
+<style>
+  :root {
+    --ground: #f5f5f3;
+    --surface: #ffffff;
+    --ink: #18191b;
+    --muted: #6e7075;
+    --line: #e2e2df;
+    --stamp: #f2c200;
+    --stamp-ink: #18191b;
+    --focus: #b38f00;
+    --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #121314; --surface: #1a1b1d; --ink: #ededeb;
+      --muted: #8e9096; --line: #2a2c2f; --focus: #f2c200;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #121314; --surface: #1a1b1d; --ink: #ededeb;
+    --muted: #8e9096; --line: #2a2c2f; --focus: #f2c200;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--ground); color: var(--ink);
+    font: 16px/1.6 var(--sans);
+    padding-inline: 20px; padding-block: 28px 80px;
+  }
+  main { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 56px; }
+  main > * { min-width: 0; }
+  a { color: inherit; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
+
+  nav { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .mark { font-weight: 600; font-size: 17px; letter-spacing: -0.01em; }
+  nav a { color: var(--muted); font-size: 14px; text-decoration: none; }
+  nav a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
+  nav .spacer { margin-left: auto; }
+
+  .hero { display: grid; gap: 18px; }
+  h1 {
+    font-size: clamp(30px, 6vw, 46px); line-height: 1.1; font-weight: 600;
+    letter-spacing: -0.03em; margin: 0; text-wrap: balance; max-width: 15ch;
+  }
+  .lead { font-size: 18px; color: var(--muted); margin: 0; max-width: 58ch; }
+  .lead strong { color: var(--ink); font-weight: 500; }
+  .cta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 6px; }
+  .button {
+    background: var(--ink); color: var(--ground); border: 0; border-radius: 9px;
+    padding: 13px 22px; font-weight: 500; font-size: 16px; text-decoration: none; display: inline-block;
+  }
+  .button:hover { opacity: 0.9; }
+  .aside { color: var(--muted); font-size: 14px; }
+
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--muted); margin: 0 0 18px; font-weight: 500; }
+  section > p:last-child { margin-bottom: 0; }
+
+  .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: step; }
+  .steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; align-items: start; }
+  .steps li::before {
+    counter-increment: step; content: counter(step);
+    font: 500 13px/28px var(--mono); text-align: center;
+    width: 28px; height: 28px; border-radius: 50%;
+    background: var(--stamp); color: var(--stamp-ink);
+  }
+  .steps h3 { font-size: 16px; font-weight: 500; margin: 3px 0 2px; }
+  .steps p { margin: 0; color: var(--muted); font-size: 15px; }
+
+  .page-shot {
+    background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px; display: grid; gap: 10px;
+  }
+  .page-shot .head { display: flex; align-items: baseline; gap: 10px; }
+  .badge {
+    background: var(--stamp); color: var(--stamp-ink);
+    font: 500 12px/1 var(--mono); padding: 4px 6px; border-radius: 3px;
+  }
+  .page-shot .note { color: var(--muted); font-size: 13px; }
+  .screen {
+    background: #1e1f22; border-radius: 6px; padding: 14px 16px;
+    font-family: var(--mono); font-size: 13px; line-height: 1.7; color: #d7dae0; overflow-x: auto;
+  }
+  .screen .kw { color: #cf8e6d; }
+  .screen .fn { color: #56a8f5; }
+  .screen .num { color: #2aacb8; }
+  .screen .out { color: #6aab73; }
+  .said { font-size: 14px; color: var(--muted); display: grid; gap: 3px; }
+  .said code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
+
+  .facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 20px; }
+  .facts h3 { font-size: 15px; font-weight: 500; margin: 0 0 4px; }
+  .facts p { margin: 0; color: var(--muted); font-size: 14.5px; }
+
+  footer { color: var(--muted); font-size: 14px; border-top: 1px solid var(--line); padding-top: 20px; }
+  footer a { text-underline-offset: 3px; }
+</style>
+</head>
+<body>
+<main>
+  <nav>
+    <span class="mark">FlipFrame</span>
+    <span class="aside">watch a video, as text and pictures</span>
+    <a class="spacer" href="/local">Local tools</a>
+    <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source</a>
+  </nav>
+
+  <header class="hero">
+    <h1>Let an AI chat watch your video.</h1>
+    <p class="lead">Claude and ChatGPT can read text and look at pictures, but they can't watch video.
+      FlipFrame turns a video into the handful of frames that actually carry information, plus a
+      transcript, and gives you <strong>one PDF to drop into the chat</strong>.</p>
+    <div class="cta">
+      <a class="button" href="/">Open FlipFrame</a>
+      <span class="aside">Free. Nothing to install. The video never leaves your device.</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>How it works</h2>
+    <ol class="steps">
+      <li>
+        <div>
+          <h3>Pick a video</h3>
+          <p>From your phone or computer. It is read in the page, not uploaded anywhere.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>Your browser does the work</h3>
+          <p>It keeps only the moments where the picture changed, crops each one to the part that
+            changed, and writes down the speech — either with Whisper running on your device, or
+            through Google with your own key.</p>
+        </div>
+      </li>
+      <li>
+        <div>
+          <h3>Share the PDF and ask</h3>
+          <p>One page per moment: the close-up, then what was said until the next one. The first page
+            tells the model how to read it, so you just ask your question.</p>
+        </div>
+      </li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>What a page looks like</h2>
+    <div class="page-shot">
+      <div class="head">
+        <span class="badge">02:47</span>
+        <span class="note">close-up of the part of the screen that changed</span>
+      </div>
+      <div class="screen"><span class="out">doubles</span> = [x * <span class="num">2</span> <span class="kw">for</span> x <span class="kw">in</span> <span class="fn">range</span>(<span class="num">1</span>, <span class="num">11</span>)]
+<span class="fn">print</span>(doubles)
+
+<span class="out">[2, 4, 6, 8, 10, 12, 14, 16, 18, 20]</span></div>
+      <div class="said">
+        <span>Said here:</span>
+        <span><code>[02:47]</code> During each iteration, take x and multiply it by two.</span>
+        <span><code>[02:52]</code> Then print the list of doubles.</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Worth knowing</h2>
+    <div class="facts">
+      <div>
+        <h3>Private by default</h3>
+        <p>Frames are cut in your browser. Speech can run on your device too, using a bundled Whisper
+          model. Nothing is uploaded unless you choose Google for speech, and then only the audio.</p>
+      </div>
+      <div>
+        <h3>Good at screens and slides</h3>
+        <p>Screencasts, tutorials, lectures and gameplay work well, because what matters sits still
+          long enough to be caught in a frame.</p>
+      </div>
+      <div>
+        <h3>Weak at motion</h3>
+        <p>Sport, dance and physical demos lose the movement between frames. You get where things
+          happened, not how they moved.</p>
+      </div>
+      <div>
+        <h3>Honest about gaps</h3>
+        <p>Small changes, like a line being typed, can fall between moments. The PDF says so on its
+          first page, so the model doesn't assume it saw everything.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <p>Built with ffmpeg, Whisper and Gemini. <a href="/">Open the tool</a> ·
+      <a href="/local">Local pipeline</a> ·
+      <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source on GitHub</a></p>
+  </footer>
+</main>
+</body>
+</html>

@@ -71,19 +71,31 @@ def _start_job(path: Path, coding: bool, force: bool, upload: Path | None = None
     return job_id
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return PAGE.read_text(encoding="utf-8")
+def page(name: str, headers: dict | None = None) -> HTMLResponse:
+    return HTMLResponse((WEB / name).read_text(encoding="utf-8"), headers=headers)
 
 
 # Letting the speech model use several threads needs these two headers on every file it touches.
 ISOLATION = {"Cross-Origin-Opener-Policy": "same-origin", "Cross-Origin-Embedder-Policy": "require-corp"}
 
 
+@app.get("/", response_class=HTMLResponse)
 @app.get("/share", response_class=HTMLResponse)
 def share_page() -> HTMLResponse:
-    """Browser-only page: picks frames on this device, nothing is uploaded."""
-    return HTMLResponse((WEB / "share.html").read_text(encoding="utf-8"), headers=ISOLATION)
+    """The tool: picks frames on this device, nothing is uploaded."""
+    return page("share.html", ISOLATION)
+
+
+@app.get("/about", response_class=HTMLResponse)
+def about_page() -> HTMLResponse:
+    """What FlipFrame is and how to use it."""
+    return page("landing.html")
+
+
+@app.get("/local", response_class=HTMLResponse)
+def local_page() -> HTMLResponse:
+    """The pipeline that runs on this machine: upload, frames, timeline."""
+    return page("index.html")
 
 
 @app.get("/worker.js")
@@ -206,7 +218,7 @@ def frame(video_id: str, name: str) -> FileResponse:
 
 def start(port: int, open_browser: bool = True) -> None:
     url = f"http://127.0.0.1:{port}"
-    print(f"FlipFrame running at {url}")
+    print(f"FlipFrame   {url}\nAbout page  {url}/about\nLocal tools {url}/local")
     if open_browser:
         threading.Thread(target=lambda: (time.sleep(1), webbrowser.open(url)), daemon=True).start()
     uvicorn.run(app, host="127.0.0.1", port=port, log_level="warning")
