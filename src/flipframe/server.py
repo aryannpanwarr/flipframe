@@ -17,7 +17,8 @@ from pydantic import BaseModel
 
 from . import CACHE, PROJECT, chat, has_key, load, run, source
 
-PAGE = Path(__file__).parent / "web" / "index.html"
+WEB = Path(__file__).parent / "web"
+PAGE = WEB / "index.html"
 UPLOADS = CACHE / "uploads"
 SAMPLES = Path(os.environ.get("FLIPFRAME_SAMPLES", PROJECT / "test-videos"))
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
@@ -70,6 +71,12 @@ def _start_job(path: Path, coding: bool, force: bool, upload: Path | None = None
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
     return PAGE.read_text(encoding="utf-8")
+
+
+@app.get("/share", response_class=HTMLResponse)
+def share_page() -> str:
+    """Browser-only page: picks frames on this device, nothing is uploaded."""
+    return (WEB / "share.html").read_text(encoding="utf-8")
 
 
 @app.post("/api/upload")
