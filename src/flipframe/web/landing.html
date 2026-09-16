@@ -79,36 +79,6 @@
   .examples { display: grid; gap: 22px; }
   .example > h3 { font-size: 15px; font-weight: 500; margin: 0 0 8px; }
   .example > h3 span { color: var(--muted); font-weight: 400; }
-  .scene {
-    position: relative; border-radius: 6px; overflow: hidden; aspect-ratio: 16 / 7;
-    background:
-      radial-gradient(120% 90% at 50% 120%, #3a3128 0%, #241f1b 45%, #14110f 100%),
-      linear-gradient(#0d0b0a, #0d0b0a);
-    display: grid; place-items: center;
-  }
-  .scene .arch {
-    position: absolute; inset: auto 50% 0 auto; translate: 50% 0;
-    width: 46%; height: 78%; border-radius: 50% 50% 0 0 / 60% 60% 0 0;
-    background: linear-gradient(#1b1714, #0a0908); box-shadow: 0 0 60px 18px rgba(0,0,0,0.6);
-  }
-  .scene .torch {
-    position: absolute; top: 34%; width: 10px; height: 10px; border-radius: 50%;
-    background: #f3b34a; box-shadow: 0 0 26px 12px rgba(243, 179, 74, 0.5);
-  }
-  .scene .torch.left { left: 18%; }
-  .scene .torch.right { right: 18%; }
-  .scene .banner {
-    position: relative; z-index: 1; color: #e8e2d6; font-size: clamp(14px, 3vw, 22px);
-    letter-spacing: 0.04em; font-family: Georgia, "Times New Roman", serif;
-    border-bottom: 1px solid rgba(232, 226, 214, 0.45); padding-bottom: 6px;
-  }
-  .scene .hud {
-    position: absolute; top: 10px; left: 12px; display: grid; gap: 3px;
-  }
-  .scene .hud i { display: block; height: 4px; border-radius: 2px; }
-  .scene .hud i:nth-child(1) { width: 92px; background: #8d3a35; }
-  .scene .hud i:nth-child(2) { width: 68px; background: #3f6a86; }
-  .scene .hud i:nth-child(3) { width: 74px; background: #5f7a45; }
   .page-shot {
     background: var(--surface); border: 1px solid var(--line); border-radius: 10px;
     padding: 18px; display: grid; gap: 10px;
@@ -215,18 +185,12 @@
           <span class="badge">00:08</span>
           <span class="note">full frame</span>
         </div>
-        <img id="example-frame" alt="A frame from a gameplay video, with the area name shown on screen" hidden>
-        <div class="scene" id="example-drawing" role="img" aria-label="Dim stone hall lit by two torches, with an area name appearing on screen">
-          <span class="hud"><i></i><i></i><i></i></span>
-          <span class="arch"></span>
-          <span class="torch left"></span>
-          <span class="torch right"></span>
-          <span class="banner">Sunken Catacombs</span>
-        </div>
+        <img id="example-frame" src="/example-frame.jpg"
+             alt="A frame from a gameplay video: an area name appears on screen over a ruined stone courtyard, with health and stamina bars and item slots at the edges">
         <div class="said">
           <span>Nothing said between this moment and the next.</span>
-          <span class="note">The picture still tells you where you are: the area name appears on screen,
-            the health and stamina bars are full, and two torches mark the entrance.</span>
+          <span class="note">The picture still carries the information: the area name on screen, the
+            health and stamina bars, the items in hand and the count in the corner.</span>
         </div>
       </div>
     </div>
@@ -266,13 +230,9 @@
   </footer>
 </main>
 <script>
-  // Show a real frame when one sits in web/local/, otherwise keep the drawing.
-  const real = document.getElementById("example-frame");
-  real.onload = () => {
-    real.hidden = false;
-    document.getElementById("example-drawing").hidden = true;
-  };
-  real.src = "/example-frame.jpg";
+  // The example needs its picture: without one, drop the whole panel rather than show a gap.
+  const frame = document.getElementById("example-frame");
+  frame.onerror = () => frame.closest(".example").remove();
 </script>
 </body>
 </html>
