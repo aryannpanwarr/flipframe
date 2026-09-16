@@ -36,7 +36,7 @@
     font: 16px/1.6 var(--sans);
     padding-inline: 20px; padding-block: 28px 80px;
   }
-  main { max-width: 760px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 56px; }
+  main { max-width: 1120px; margin: 0 auto; display: grid; grid-template-columns: minmax(0, 1fr); gap: 56px; }
   main > * { min-width: 0; }
   a { color: inherit; }
   :focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; }
@@ -47,7 +47,11 @@
   nav a:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
   nav .spacer { margin-left: auto; }
 
-  .hero { display: grid; gap: 18px; }
+  .hero { display: flex; flex-wrap: wrap; gap: 32px 48px; align-items: center; }
+  .hero-text { flex: 1 1 380px; display: grid; gap: 18px; }
+  .hero-shot { flex: 1 1 380px; margin: 0; display: grid; gap: 8px; }
+  .hero-shot img { width: 100%; border: 1px solid var(--line); border-radius: 10px; display: block; }
+  .hero-shot figcaption { color: var(--muted); font-size: 13px; }
   h1 {
     font-size: clamp(30px, 6vw, 46px); line-height: 1.1; font-weight: 600;
     letter-spacing: -0.03em; margin: 0; text-wrap: balance; max-width: 15ch;
@@ -67,6 +71,12 @@
 
   .steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 22px; counter-reset: step; }
   .steps li { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 14px; align-items: start; }
+  @media (min-width: 900px) {
+    .steps { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 32px; }
+    .steps li { grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; }
+    .examples { grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; gap: 28px; }
+    h2 { margin-bottom: 22px; }
+  }
   .steps li::before {
     counter-increment: step; content: counter(step);
     font: 500 13px/28px var(--mono); text-align: center;
@@ -76,7 +86,9 @@
   .steps h3 { font-size: 16px; font-weight: 500; margin: 3px 0 2px; }
   .steps p { margin: 0; color: var(--muted); font-size: 15px; }
 
-  .examples { display: grid; gap: 22px; }
+  .examples { display: grid; gap: 22px; align-items: start; }
+  .example { display: grid; align-content: start; gap: 0; }
+  .page-shot { height: 100%; align-content: start; }
   .example > h3 { font-size: 15px; font-weight: 500; margin: 0 0 8px; }
   .example > h3 span { color: var(--muted); font-weight: 400; }
   .page-shot {
@@ -119,14 +131,20 @@
   </nav>
 
   <header class="hero">
-    <h1>Let an AI chat watch your video.</h1>
-    <p class="lead">Claude and ChatGPT can read text and look at pictures, but they can't watch video.
-      FlipFrame turns a video into the handful of frames that actually carry information, plus a
-      transcript, and gives you <strong>one PDF to drop into the chat</strong>.</p>
-    <div class="cta">
-      <a class="button" href="/app">Open FlipFrame</a>
-      <span class="aside">Free. Nothing to install. The video never leaves your device.</span>
+    <div class="hero-text">
+      <h1>Let an AI chat watch your video.</h1>
+      <p class="lead">Claude and ChatGPT can read text and look at pictures, but they can't watch video.
+        FlipFrame turns a video into the handful of frames that actually carry information, plus a
+        transcript, and gives you <strong>one PDF to drop into the chat</strong>.</p>
+      <div class="cta">
+        <a class="button" href="/app">Open FlipFrame</a>
+        <span class="aside">Free. Nothing to install. The video never leaves your device.</span>
+      </div>
     </div>
+    <figure class="hero-shot" id="hero-shot" hidden>
+      <img id="hero-frame" alt="A moment taken from a video: one frame with its timestamp">
+      <figcaption>One moment from a video, as FlipFrame hands it over.</figcaption>
+    </figure>
   </header>
 
   <section>
@@ -230,9 +248,13 @@
   </footer>
 </main>
 <script>
-  // The example needs its picture: without one, drop the whole panel rather than show a gap.
+  // Both pictures come from web/local/. Without one, drop its panel rather than leave a gap.
   const frame = document.getElementById("example-frame");
   frame.onerror = () => frame.closest(".example").remove();
+
+  const hero = document.getElementById("hero-frame");
+  hero.onload = () => { document.getElementById("hero-shot").hidden = false; };
+  hero.src = "/example-frame.jpg";
 </script>
 </body>
 </html>
