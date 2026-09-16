@@ -82,7 +82,7 @@
   .secondary:hover { border-color: var(--muted); }
   button:disabled { opacity: 0.45; cursor: default; }
 
-  .sheets { display: grid; gap: 10px; }
+  .sheets { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
   .sheets figure { margin: 0; display: grid; gap: 6px; }
   .sheets img { width: 100%; border: 1px solid var(--line); border-radius: 6px; display: block; background: #000; }
   .sheets figcaption { font-family: var(--mono); font-size: 12px; color: var(--muted); }
@@ -139,9 +139,9 @@
       </label>
       <label>Detail
         <select id="budget">
-          <option value="45">Light (45 frames)</option>
-          <option value="90" selected>Normal (90 frames)</option>
-          <option value="144">Heavy (144 frames)</option>
+          <option value="20">Light (20 moments)</option>
+          <option value="40" selected>Normal (40 moments)</option>
+          <option value="70">Heavy (70 moments)</option>
         </select>
       </label>
     </div>
@@ -183,7 +183,7 @@
       <pre class="prompt" id="prompt"></pre>
     </div>
     <div style="margin-top:20px">
-      <p class="label" id="sheets-label">Contact sheets</p>
+      <p class="label" id="sheets-label">Moments</p>
       <div class="sheets" id="sheets"></div>
     </div>
   </section>
@@ -243,13 +243,48 @@ function percentChanged(a, b) {
   return (changed / a.length) * 100;
 }
 
+// Where on screen the change happened, as fractions of the frame (0-1), plus how much changed.
+function changedArea(a, b) {
+  let changed = 0, minX = THUMB_W, minY = THUMB_H, maxX = 0, maxY = 0;
+  for (let i = 0; i < a.length; i++) {
+    if (Math.abs(a[i] - b[i]) <= PIXEL_CHANGED) continue;
+    changed++;
+    const x = i % THUMB_W, y = (i / THUMB_W) | 0;
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+  const percent = (changed / a.length) * 100;
+  if (!changed) return { percent, box: null };
+  return { percent, box: { x: minX / THUMB_W, y: minY / THUMB_H,
+                           w: (maxX - minX + 1) / THUMB_W, h: (maxY - minY + 1) / THUMB_H } };
+}
+
+// Grow the changed area so it keeps its surroundings and never becomes a sliver.
+function cropWindow(box, videoW, videoH) {
+  if (!box) return { sx: 0, sy: 0, sw: videoW, sh: videoH };
+  const pad = 0.06, minSide = 0.5;
+  let { x, y, w, h } = box;
+  x -= pad; y -= pad; w += pad * 2; h += pad * 2;
+  if (w < minSide) { x -= (minSide - w) / 2; w = minSide; }
+  if (h < minSide) { y -= (minSide - h) / 2; h = minSide; }
+  const ratio = (videoW / videoH) / (w * videoW / (h * videoH));   // keep the frame's shape
+  if (ratio > 1) { const grow = w * (ratio - 1); x -= grow / 2; w += grow; }
+  else { const grow = h * (1 / ratio - 1); y -= grow / 2; h += grow; }
+  x = Math.max(0, Math.min(x, 1 - Math.min(w, 1)));
+  y = Math.max(0, Math.min(y, 1 - Math.min(h, 1)));
+  w = Math.min(w, 1 - x); h = Math.min(h, 1 - y);
+  return { sx: x * videoW, sy: y * videoH, sw: w * videoW, sh: h * videoH };
+}
+
 function brightness(gray) {
   let total = 0;
   for (let i = 0; i < gray.length; i++) total += gray[i];
   return total / gray.length;
 }
 
-async function pickFrames(video, budget) {
+async function pickMoments(video, budget) {
   const canvas = document.createElement("canvas");
   canvas.width = THUMB_W; canvas.height = THUMB_H;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -261,64 +296,45 @@ async function pickFrames(video, budget) {
     await seek(video, t);
     const gray = grayFrame(video, ctx);
     if (brightness(gray) < 8) continue;                       // black frame or fade
-    const changed = last ? percentChanged(gray, last) : 100;
-    const gap = kept.length ? t - kept[kept.length - 1] : MAX_GAP;
+    const { percent, box } = last ? changedArea(gray, last) : { percent: 100, box: null };
+    const gap = kept.length ? t - kept[kept.length - 1].t : MAX_GAP;
     // A talking face changes a little every second; only a real cut beats the minimum gap.
-    if ((changed > CHANGED_PERCENT && gap >= MIN_GAP) || changed > BIG_CHANGE || gap >= MAX_GAP) {
-      kept.push(t);
+    if ((percent > CHANGED_PERCENT && gap >= MIN_GAP) || percent > BIG_CHANGE || gap >= MAX_GAP) {
+      kept.push({ t, box });
       last = gray;
     }
-    if (t % 5 === 0) setProgress((t / duration) * 0.7, `looking for frames that change — ${stamp(t)} of ${stamp(duration)}`);
+    if (t % 5 === 0) setProgress((t / duration) * 0.55, `looking for moments that change — ${stamp(t)} of ${stamp(duration)}`);
   }
 
-  if (kept.length > budget) {                                  // busy video: spread the budget over time
-    const step = kept.length / budget;
-    return Array.from({ length: budget }, (_, i) => kept[Math.floor(i * step)]);
-  }
-  return kept;
+  const chosen = kept.length > budget
+    ? Array.from({ length: budget }, (_, i) => kept[Math.floor(i * (kept.length / budget))])
+    : kept;
+
+  // Grab the picture a beat after the change, so typing has finished rather than caught mid-word.
+  return chosen.map((moment, i) => {
+    const next = chosen[i + 1] ? chosen[i + 1].t : duration + 1;
+    return { ...moment, shot: Math.min(moment.t + 1, Math.max(moment.t, next - 1)), until: next };
+  });
 }
 
-async function buildSheets(video, seconds, grid) {
-  const cellW = Math.floor(SHEET_W / grid), cellH = Math.floor(SHEET_H / grid);
-  const perSheet = grid * grid;
-  const sheets = [];
+const FRAME_W = 1280, FRAME_H = 720;
 
-  for (let i = 0; i < seconds.length; i += perSheet) {
-    const batch = seconds.slice(i, i + perSheet);
-    const rows = Math.ceil(batch.length / grid);
-    const canvas = document.createElement("canvas");
-    canvas.width = cellW * grid; canvas.height = cellH * rows;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    for (let j = 0; j < batch.length; j++) {
-      const t = batch[j];
-      await seek(video, t);
-      const x = (j % grid) * cellW, y = Math.floor(j / grid) * cellH;
-      const scale = Math.min(cellW / video.videoWidth, cellH / video.videoHeight);
-      const w = video.videoWidth * scale, h = video.videoHeight * scale;
-      ctx.drawImage(video, x + (cellW - w) / 2, y + (cellH - h) / 2, w, h);
-
-      const label = stamp(t);
-      const size = Math.round(cellH / 11);
-      ctx.font = `600 ${size}px ${getComputedStyle(document.body).getPropertyValue("--mono")}`;
-      const pad = Math.round(size / 4);
-      const width = ctx.measureText(label).width;
-      ctx.fillStyle = "#000";
-      ctx.fillRect(x + pad, y + pad, width + pad * 2, size + pad * 1.6);
-      ctx.fillStyle = "#f2c200";
-      ctx.textBaseline = "top";
-      ctx.fillText(label, x + pad * 2, y + pad * 1.6);
-      ctx.fillStyle = "#000";
-
-      setProgress(0.7 + ((i + j) / seconds.length) * 0.3, `building sheet ${sheets.length + 1} — ${stamp(t)}`);
-    }
-
-    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.85));
-    sheets.push({ blob, seconds: batch, index: sheets.length + 1 });
+async function buildFrames(video, moments) {
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d");
+  const out = [];
+  for (let i = 0; i < moments.length; i++) {
+    const m = moments[i];
+    await seek(video, m.shot);
+    const { sx, sy, sw, sh } = cropWindow(m.box, video.videoWidth, video.videoHeight);
+    const scale = Math.min(FRAME_W / sw, FRAME_H / sh, 2);
+    canvas.width = Math.round(sw * scale); canvas.height = Math.round(sh * scale);
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise((r) => canvas.toBlob(r, "image/jpeg", 0.88));
+    out.push({ ...m, blob, cropped: !!m.box });
+    setProgress(0.55 + ((i + 1) / moments.length) * 0.07, `cutting out frame ${i + 1} of ${moments.length}`);
   }
-  return sheets;
+  return out;
 }
 
 // Both models ship with this page; the bigger one is better with numbers and names.
@@ -390,11 +406,17 @@ async function transcribeChunk(key, blob, offset, length) {
     { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error?.message || `Google returned ${res.status}`);
-  const text = data.candidates?.[0]?.content?.parts?.map((p) => p.text).join("") || "";
+  const candidate = data.candidates?.[0];
+  const text = candidate?.content?.parts?.map((p) => p.text).filter(Boolean).join("") || "";
   const lines = [];
   for (const raw of text.split("\n")) {
     const m = raw.trim().match(/^\[?\s*(\d{1,2}):([0-5]\d)\s*\]?\s*[-–|:]?\s*(.+)$/);
     if (m) lines.push({ t: offset + Math.min(Number(m[1]) * 60 + Number(m[2]), length), text: m[3].trim() });
+  }
+  if (!lines.length) {
+    // Don't let a piece go missing in silence: say why it gave nothing back.
+    const why = candidate?.finishReason ? `finishReason ${candidate.finishReason}` : "no text returned";
+    lines.empty = `${stamp(offset)}-${stamp(offset + length)}: ${why}${text ? `, unparsed: ${text.slice(0, 60)}` : ""}`;
   }
   return lines;
 }
@@ -446,15 +468,16 @@ async function transcribeWithGoogle(samples, key) {
     await new Promise((r) => setTimeout(r));   // let the page repaint
   }
 
-  const lines = [];
+  const lines = [], empties = [];
   let done = 0;
   for (let i = 0; i < chunks.length; i += AT_ONCE) {
     const batch = chunks.slice(i, i + AT_ONCE);
     const results = await Promise.all(batch.map((c) => transcribeChunk(key, c.blob, c.offset, CHUNK_SECONDS)));
-    results.forEach((r) => lines.push(...r));
+    results.forEach((r) => { lines.push(...r); if (r.empty) empties.push(r.empty); });
     done += batch.length;
     setProgress(0.8 + (done / chunks.length) * 0.2, `transcribing ${done} of ${chunks.length} piece(s)…`);
   }
+  if (empties.length) showError(`Some audio pieces came back empty — ${empties.join("; ")}`);
   return lines.sort((a, b) => a.t - b.t);
 }
 
@@ -473,6 +496,25 @@ function dropRepeats(lines) {
   return out;
 }
 
+// Long entries hide when things were said; split them into sentences and spread the times.
+function splitLines(lines, duration) {
+  const out = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const until = i + 1 < lines.length ? lines[i + 1].t : duration;
+    const parts = line.text.split(/(?<=[.!?])\s+/).filter((p) => p.trim());
+    if (parts.length < 2 || until - line.t < 4) { out.push(line); continue; }
+    const chars = parts.reduce((n, p) => n + p.length, 0);
+    let at = line.t, used = 0;
+    for (const part of parts) {
+      out.push({ t: Math.round(at), text: part.trim() });
+      used += part.length;
+      at = line.t + ((until - line.t) * used) / chars;
+    }
+  }
+  return out;
+}
+
 function requireKey(key) {
   if (!key) throw new Error("no Google API key entered");
   return key;
@@ -483,17 +525,8 @@ function showError(text) {
   $("error").hidden = false;
 }
 
-function promptFor(name, duration, sheets, grid) {
-  const times = sheets.flatMap((s) => s.seconds).map(stamp).join(", ");
-  return `These images are frames from a video I can't paste directly: "${name}" (${stamp(duration)} long).
-
-Each image is a contact sheet holding up to ${grid * grid} frames in order, left to right, top to bottom. The yellow label on each frame is its timestamp in the video. There are ${sheets.length} sheet(s), in order.
-
-Frames were kept only where the picture changed, so still stretches are skipped. Frames shown: ${times}.
-
-When you answer, cite the timestamps you used.
-
-My question: `;
+function cleanTitle(name) {
+  return name.replace(/\.[^.]+$/, "").replace(/\s*[\[(][\w-]{6,}[\])]\s*$/, "").replace(/[_]+/g, " ").trim() || name;
 }
 
 async function process(file) {
@@ -508,10 +541,9 @@ async function process(file) {
   try {
     video = await loadVideo(file);
     if (!video.duration || !isFinite(video.duration)) throw new Error("Couldn't read the length of this video.");
-    const grid = $("coding").checked ? 2 : 3;
-    const seconds = await pickFrames(video, Number($("budget").value));
-    if (!seconds.length) throw new Error("No usable frames found. Is the video all black?");
-    const sheets = await buildSheets(video, seconds, grid);
+    const moments = await pickMoments(video, Number($("budget").value));
+    if (!moments.length) throw new Error("No usable frames found. Is the video all black?");
+    const frames = await buildFrames(video, moments);
 
     let transcript = [];
     if ($("speech").checked) {
@@ -548,11 +580,12 @@ async function process(file) {
     }
 
     const duration = Math.floor(video.duration);
-    setProgress(0.98, "building the PDF…");
+    transcript = splitLines(transcript, duration);
+    setProgress(0.95, "building the PDF…");
     const spoken = transcript.map((l) => `[${stamp(l.t)}] ${l.text}`).join("\n");
-    result = { name: file.name, duration, sheets, grid, transcript, spoken, pdf: null,
-               prompt: `The attached PDF is a video turned into pictures and text: "${file.name}" (${stamp(duration)} long). `
-                 + `Its first page explains how to read it.\n\nMy question: ` };
+    result = { name: file.name, title: cleanTitle(file.name), duration, frames, transcript, spoken, pdf: null,
+               prompt: `The attached PDF is a video turned into pictures and text: "${cleanTitle(file.name)}" `
+                 + `(${stamp(duration)} long). Its first page explains how to read it.\n\nMy question: ` };
     result.pdf = await buildPdf();
     showResult();
   } catch (err) {
@@ -582,85 +615,102 @@ function imageSize(dataUrl) {
   });
 }
 
-// One file holding everything: instructions, transcript as real text, then the sheets.
+// One page per moment: the picture, then what was said from then until the next moment.
 async function buildPdf() {
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({ unit: "pt", format: "a4" });
   const M = 48, W = 595 - M * 2;
   let y = M;
 
-  const write = (text, { size = 11, style = "normal", gap = 6, color = 30 } = {}) => {
+  const write = (text, { size = 11, style = "normal", gap = 6, color = 30, width = W, x = M } = {}) => {
     doc.setFont("helvetica", style);
     doc.setFontSize(size);
     doc.setTextColor(color);
-    for (const line of doc.splitTextToSize(text, W)) {
+    for (const line of doc.splitTextToSize(text, width)) {
       if (y > 842 - M) { doc.addPage("a4", "portrait"); y = M; }
-      doc.text(line, M, y);
+      doc.text(line, x, y);
       y += size * 1.35;
     }
     y += gap;
   };
 
-  const total = result.sheets.reduce((n, sh) => n + sh.seconds.length, 0);
-  write(result.name, { size: 18, style: "bold", gap: 4 });
-  write(`${stamp(result.duration)} long · ${total} frames · ${result.sheets.length} contact sheet(s)`
-        + (result.spoken ? " · transcript included" : " · no transcript"), { size: 10, color: 110, gap: 16 });
+  write(result.title, { size: 18, style: "bold", gap: 4 });
+  write(`${stamp(result.duration)} long · ${result.frames.length} moments`
+        + (result.spoken ? " · speech included" : " · no speech"), { size: 10, color: 110, gap: 16 });
 
   write("How to read this file", { size: 13, style: "bold", gap: 4 });
-  write(`This is a video turned into pictures and text. After this page, each page is a contact sheet holding up to `
-    + `${result.grid * result.grid} frames from the video, in order, left to right and top to bottom. The yellow label on `
-    + `each frame is its timestamp. Frames were kept only where the picture changed, so gaps mean nothing moved. `
-    + (result.spoken ? "The transcript below is what was said, with timestamps. " : "There is no audio here, so work from what is on screen. ")
-    + "When you answer, cite the timestamps you used.", { gap: 14 });
+  write("Each page after this one is a single moment from the video, in order: a picture of the screen "
+    + "at that time, then what was said from that moment until the next one. The heading gives the exact "
+    + "timestamp.", { gap: 10 });
+  write("Two things to keep in mind. Pictures are cropped to the part of the screen that changed, so you "
+    + "are usually seeing a close-up rather than the whole screen. And moments are chosen by how much the "
+    + "picture changed, so small changes such as a line being typed can be missed: if the speech mentions "
+    + "something you cannot see, it probably happened between two pictures rather than not at all.",
+    { gap: 10 });
+  write("When you answer, cite the timestamps you used.", { gap: 4 });
 
-  if (result.spoken) {
-    write("Transcript", { size: 13, style: "bold", gap: 4 });
-    for (const line of result.transcript) write(`[${stamp(line.t)}] ${line.text}`, { size: 10, gap: 0, color: 60 });
-  }
-
-  for (const sheet of result.sheets) {
-    const url = await blobToDataUrl(sheet.blob);
+  for (let i = 0; i < result.frames.length; i++) {
+    const frame = result.frames[i];
+    const url = await blobToDataUrl(frame.blob);
     const { w, h } = await imageSize(url);
-    const caption = 44;
-    doc.addPage([w, h + caption], w > h ? "landscape" : "portrait");
-    doc.setFillColor(255, 255, 255);
-    doc.rect(0, 0, w, h + caption, "F");
-    doc.addImage(url, "JPEG", 0, 0, w, h);
+    const pageW = 842, pageH = 595, margin = 24;
+    doc.addPage([pageW, pageH], "landscape");   // explicit size: the orientation flag alone is ignored
+    const maxW = pageW - margin * 2, maxH = 430;
+    const scale = Math.min(maxW / w, maxH / h);
+    const dw = w * scale, dh = h * scale;
+
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(13);
+    doc.setTextColor(30);
+    doc.text(`[${stamp(frame.shot)}]`, margin, 30);
     doc.setFont("helvetica", "normal");
-    doc.setFontSize(18);
-    doc.setTextColor(60);
-    doc.text(`Sheet ${sheet.index} of ${result.sheets.length} — ${sheet.seconds.map(stamp).join("  ")}`,
-             16, h + 28, { maxWidth: w - 32 });
+    doc.setFontSize(9);
+    doc.setTextColor(120);
+    doc.text(frame.cropped ? "close-up of the part of the screen that changed" : "full frame",
+             margin + 52, 30);
+
+    doc.addImage(url, "JPEG", margin + (maxW - dw) / 2, 40, dw, dh);
+
+    const said = result.transcript.filter((l) => l.t >= frame.t && l.t < frame.until);
+    y = 40 + dh + 20;
+    if (said.length) {
+      write("Said here:", { size: 9, color: 120, gap: 3, width: maxW, x: margin });
+      for (const line of said) {
+        if (y > pageH - margin) break;
+        write(`[${stamp(line.t)}] ${line.text}`, { size: 10, color: 40, gap: 1, width: maxW, x: margin });
+      }
+    } else if (result.spoken) {
+      write("Nothing said here.", { size: 9, color: 140, gap: 0, width: maxW, x: margin });
+    }
+    setProgress(0.95 + ((i + 1) / result.frames.length) * 0.05, `building the PDF — page ${i + 2}`);
   }
 
   return doc.output("blob");
 }
 
 function files() {
-  const base = result.name.replace(/\.[^.]+$/, "");
-  return [new File([result.pdf], `${base} — FlipFrame.pdf`, { type: "application/pdf" })];
+  return [new File([result.pdf], `${result.title} — FlipFrame.pdf`, { type: "application/pdf" })];
 }
 
 function showResult() {
-  const total = result.sheets.reduce((n, s) => n + s.seconds.length, 0);
-  $("summary").textContent = `${total} frames from ${stamp(result.duration)} → 1 PDF, `
-    + `${result.sheets.length + 1} pages, ${Math.round(result.pdf.size / 102400) / 10} MB`
-    + (result.spoken ? `, transcript included` : `, no transcript`);
+  $("summary").textContent = `${result.frames.length} moments from ${stamp(result.duration)} → 1 PDF, `
+    + `${result.frames.length + 1} pages, ${Math.round(result.pdf.size / 102400) / 10} MB`
+    + (result.spoken ? `, speech included` : `, no speech`);
   $("prompt").textContent = result.prompt;
   $("transcript-box").hidden = !result.spoken;
   if (result.spoken) {
     $("transcript-label").textContent = `Transcript (${result.transcript.length} lines)`;
     $("transcript").textContent = result.spoken;
   }
-  $("sheets-label").textContent = `Contact sheets (${result.sheets.length})`;
+  $("sheets-label").textContent = `Moments (${result.frames.length})`;
   $("sheets").innerHTML = "";
-  for (const s of result.sheets) {
+  for (const frame of result.frames) {
     const figure = document.createElement("figure");
     const img = document.createElement("img");
-    img.src = URL.createObjectURL(s.blob);
-    img.alt = `Frames ${stamp(s.seconds[0])} to ${stamp(s.seconds[s.seconds.length - 1])}`;
+    img.src = URL.createObjectURL(frame.blob);
+    img.alt = `Frame at ${stamp(frame.shot)}`;
     const caption = document.createElement("figcaption");
-    caption.textContent = `Sheet ${s.index} — ${stamp(s.seconds[0])} to ${stamp(s.seconds[s.seconds.length - 1])}`;
+    caption.textContent = `${stamp(frame.shot)}${frame.cropped ? " · close-up" : ""}`;
     figure.append(img, caption);
     $("sheets").append(figure);
   }
