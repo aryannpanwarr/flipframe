@@ -214,7 +214,9 @@ def example_frame() -> FileResponse:
     """A frame the landing page shows instead of its drawing, if you put one here."""
     path = WEB / "local" / "example-frame.jpg"
     if not path.is_file():
-        raise HTTPException(404, "No local example frame")
+        path = WEB / "example-frame.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "No example frame")
     return FileResponse(path, headers={"Cache-Control": "max-age=300"})
 
 

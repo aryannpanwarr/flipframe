@@ -3,5 +3,7 @@
   "buildCommand": "bash scripts/build-site.sh",
   "outputDirectory": "public",
   "cleanUrls": true,
-  "trailingSlash": false
+  "trailingSlash": false,
+  "framework": null,
+  "installCommand": "echo 'static site: nothing to install'"
 }

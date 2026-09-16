@@ -13,6 +13,7 @@ cp "$WEB/share.html"   "$OUT/app.html"
 cp "$WEB/worker.js"    "$OUT/worker.js"
 cp "$WEB"/vendor/*.js  "$OUT/vendor/"
 cp "$WEB"/vendor/ort/* "$OUT/vendor/ort/"
+cp "$WEB/example-frame.jpg" "$OUT/example-frame.jpg"
 
 # Links to pages that only exist on your own machine have no place on the public site.
 python3 - "$OUT/index.html" <<'PY'
