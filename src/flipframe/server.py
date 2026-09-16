@@ -100,8 +100,10 @@ def local_page() -> HTMLResponse:
 
 
 @app.get("/worker.js")
-def worker() -> FileResponse:
-    return FileResponse(WEB / "worker.js", media_type="text/javascript", headers=ISOLATION)
+@app.get("/mp3-worker.js")
+def worker(request: Request) -> FileResponse:
+    name = "mp3-worker.js" if request.url.path.endswith("mp3-worker.js") else "worker.js"
+    return FileResponse(WEB / name, media_type="text/javascript", headers=ISOLATION)
 
 
 @app.post("/api/upload")

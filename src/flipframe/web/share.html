@@ -299,6 +299,14 @@ async function realDuration(video) {
   return Number.isFinite(d) && d > 0 ? d : 0;
 }
 
+// Sampling is the slow part, so take as few samples as the rules actually need.
+async function scanVideo(video, step, duration, onTick) {
+  for (let t = 0; t <= duration; t += step) {
+    await seek(video, t);
+    onTick(t);
+  }
+}
+
 async function pickMoments(video, budget) {
   const canvas = document.createElement("canvas");
   canvas.width = THUMB_W; canvas.height = THUMB_H;
@@ -307,11 +315,13 @@ async function pickMoments(video, budget) {
   if (!duration) throw new Error("Couldn't work out how long this video is. Try converting it to MP4.");
   const kept = [];
   let last = null;
+  // Frames are never kept closer than MIN_GAP apart, so looking every second buys nothing on
+  // a long video.
+  const step = duration > 600 ? 3 : duration > 180 ? 2 : 1;
 
-  for (let t = 0; t <= duration; t++) {
-    await seek(video, t);
+  await scanVideo(video, step, duration, (t) => {
     const gray = grayFrame(video, ctx);
-    if (brightness(gray) < 8) continue;                       // black frame or fade
+    if (brightness(gray) < 8) return;                         // black frame or fade
     const { percent, box } = last ? changedArea(gray, last) : { percent: 100, box: null };
     const gap = kept.length ? t - kept[kept.length - 1].t : MAX_GAP;
     // A talking face changes a little every second; only a real cut beats the minimum gap.
@@ -320,7 +330,7 @@ async function pickMoments(video, budget) {
       last = gray;
     }
     if (t % 5 === 0) setProgress((t / duration) * 0.55, `looking for moments that change — ${stamp(t)} of ${stamp(duration)}`);
-  }
+  });
 
   const chosen = kept.length > budget
     ? Array.from({ length: budget }, (_, i) => kept[Math.floor(i * (kept.length / budget))])
@@ -492,13 +502,31 @@ function transcribeOnDevice(samples) {
   });
 }
 
+let mp3Worker = null;
+
+// Encoding five minutes of audio blocks the page for seconds; hand it to a worker instead.
+function packAudio(samples, offset) {
+  if (!mp3Worker) mp3Worker = new Worker(new URL("mp3-worker.js", location.href));
+  const id = `${offset}-${Math.random()}`;
+  return new Promise((resolve, reject) => {
+    const onMessage = ({ data }) => {
+      if (data.id !== id) return;
+      mp3Worker.removeEventListener("message", onMessage);
+      data.error ? reject(new Error(data.error)) : resolve(new Blob([data.mp3], { type: "audio/mpeg" }));
+    };
+    mp3Worker.addEventListener("message", onMessage);
+    const copy = samples.slice();
+    mp3Worker.postMessage({ id, samples: copy, rate: AUDIO_RATE }, [copy.buffer]);
+  });
+}
+
 async function transcribeWithGoogle(samples, key) {
   const perChunk = CHUNK_SECONDS * AUDIO_RATE;
   const chunks = [];
   for (let i = 0; i < samples.length; i += perChunk) {
     setProgress(0.62 + (i / samples.length) * 0.18, `packing audio ${Math.floor(i / perChunk) + 1}…`);
-    chunks.push({ blob: encodeMp3(samples.subarray(i, i + perChunk)), offset: Math.round(i / AUDIO_RATE) });
-    await new Promise((r) => setTimeout(r));   // let the page repaint
+    chunks.push({ blob: await packAudio(samples.subarray(i, i + perChunk), Math.round(i / AUDIO_RATE)),
+                  offset: Math.round(i / AUDIO_RATE) });
   }
 
   const lines = [], empties = [];
