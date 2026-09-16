@@ -209,6 +209,15 @@ def ask(video_id: str, req: ChatRequest) -> StreamingResponse:
     return StreamingResponse(body(), media_type="text/plain; charset=utf-8")
 
 
+@app.get("/example-frame.jpg")
+def example_frame() -> FileResponse:
+    """A frame the landing page shows instead of its drawing, if you put one here."""
+    path = WEB / "local" / "example-frame.jpg"
+    if not path.is_file():
+        raise HTTPException(404, "No local example frame")
+    return FileResponse(path, headers={"Cache-Control": "max-age=300"})
+
+
 @app.get("/frames/{video_id}/{name}")
 def frame(video_id: str, name: str) -> FileResponse:
     path = CACHE / video_id / "frames" / name

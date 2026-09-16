@@ -8,3 +8,4 @@ cache/
 .claude/settings.local.json
 test-videos/
 src/flipframe/web/models/
+src/flipframe/web/local/

@@ -119,6 +119,7 @@
     font: 500 12px/1 var(--mono); padding: 4px 6px; border-radius: 3px;
   }
   .page-shot .note { color: var(--muted); font-size: 13px; }
+  #example-frame { width: 100%; border-radius: 6px; display: block; }
   .screen {
     background: #1e1f22; border-radius: 6px; padding: 14px 16px;
     font-family: var(--mono); font-size: 13px; line-height: 1.7; color: #d7dae0; overflow-x: auto;
@@ -214,7 +215,8 @@
           <span class="badge">00:08</span>
           <span class="note">full frame</span>
         </div>
-        <div class="scene" role="img" aria-label="Dim stone hall lit by two torches, with an area name appearing on screen">
+        <img id="example-frame" alt="A frame from a gameplay video, with the area name shown on screen" hidden>
+        <div class="scene" id="example-drawing" role="img" aria-label="Dim stone hall lit by two torches, with an area name appearing on screen">
           <span class="hud"><i></i><i></i><i></i></span>
           <span class="arch"></span>
           <span class="torch left"></span>
@@ -263,5 +265,14 @@
       <a href="https://github.com/aryannpanwarr/flipframe" target="_blank" rel="noopener">Source on GitHub</a></p>
   </footer>
 </main>
+<script>
+  // Show a real frame when one sits in web/local/, otherwise keep the drawing.
+  const real = document.getElementById("example-frame");
+  real.onload = () => {
+    real.hidden = false;
+    document.getElementById("example-drawing").hidden = true;
+  };
+  real.src = "/example-frame.jpg";
+</script>
 </body>
 </html>
