@@ -93,6 +93,8 @@
     padding: 10px 12px; width: 100%;
   }
   .key-row .hint a { color: inherit; }
+  .link-btn { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; cursor: pointer; font-size: 14px; }
+  .link-btn:hover { color: var(--ink); }
   pre.transcript {
     font-family: var(--mono); font-size: 12.5px; line-height: 1.7; white-space: pre-wrap;
     background: var(--surface); border: 1px solid var(--line); border-radius: 8px;
@@ -133,7 +135,12 @@
     </div>
     <div class="key-row" id="key-row">
       <input id="key" type="password" placeholder="Google Gemini API key (for transcribing speech)" autocomplete="off">
-      <p class="hint">Stored only in this browser, and sent only to Google. Get one free at
+      <div class="options">
+        <label><input id="remember" type="checkbox"> Remember the key on this device</label>
+        <button class="link-btn" id="forget" type="button" hidden>Forget it</button>
+      </div>
+      <p class="hint">The key never leaves this device except to Google. It is forgotten when you close
+        the tab unless you tick the box. Get one free at
         <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a>.
         Without a key you still get the pictures, just no speech.</p>
     </div>
@@ -594,10 +601,40 @@ $("copy").addEventListener("click", async () => {
   setTimeout(() => ($("copy").textContent = "Copy prompt"), 1500);
 });
 
-try { $("key").value = localStorage.getItem("flipframe-key") || ""; } catch {}
-$("key").addEventListener("change", () => {
-  try { localStorage.setItem("flipframe-key", $("key").value.trim()); } catch {}
+// The key lives in session storage (gone when the tab closes) unless the user asks to keep it.
+const KEY_NAME = "flipframe-key";
+
+function loadKey() {
+  try {
+    const kept = localStorage.getItem(KEY_NAME);
+    $("remember").checked = !!kept;
+    $("forget").hidden = !kept;
+    $("key").value = kept || sessionStorage.getItem(KEY_NAME) || "";
+  } catch {}
+}
+
+function saveKey() {
+  const value = $("key").value.trim();
+  try {
+    if ($("remember").checked && value) {
+      localStorage.setItem(KEY_NAME, value);
+      sessionStorage.removeItem(KEY_NAME);
+    } else {
+      localStorage.removeItem(KEY_NAME);
+      if (value) sessionStorage.setItem(KEY_NAME, value); else sessionStorage.removeItem(KEY_NAME);
+    }
+    $("forget").hidden = !value;
+  } catch {}
+}
+
+$("key").addEventListener("change", saveKey);
+$("remember").addEventListener("change", saveKey);
+$("forget").addEventListener("click", () => {
+  $("key").value = "";
+  $("remember").checked = false;
+  saveKey();
 });
+loadKey();
 
 $("file").addEventListener("change", () => $("file").files[0] && process($("file").files[0]));
 $("drop").addEventListener("dragover", (e) => { e.preventDefault(); $("drop").classList.add("over"); });
